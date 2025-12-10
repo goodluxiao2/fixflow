@@ -1,9 +1,9 @@
-const express = require('express');
+import express from 'express';
 const router = express.Router();
-const logger = require('../utils/logger');
-const contractService = require('../services/contract');
-const mneeService = require('../services/mnee');
-const Bounty = require('../models/Bounty');
+import logger from '../utils/logger.js';
+import contractService from '../services/contract.js';
+import mneeService from '../services/mnee.js';
+import Bounty from '../models/Bounty.js';
 
 // Create a new bounty
 router.post('/', async (req, res) => {
@@ -12,8 +12,8 @@ router.post('/', async (req, res) => {
 
     // Validate input
     if (!repository || !issueId || !issueUrl || !amount) {
-      return res.status(400).json({ 
-        error: 'Missing required fields: repository, issueId, issueUrl, amount' 
+      return res.status(400).json({
+        error: 'Missing required fields: repository, issueId, issueUrl, amount'
       });
     }
 
@@ -53,9 +53,9 @@ router.post('/', async (req, res) => {
     });
   } catch (error) {
     logger.error('Failed to create bounty:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to create bounty',
-      message: error.message 
+      message: error.message
     });
   }
 });
@@ -85,9 +85,9 @@ router.get('/:bountyId', async (req, res) => {
     res.json(bounty);
   } catch (error) {
     logger.error('Failed to get bounty:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to get bounty details',
-      message: error.message 
+      message: error.message
     });
   }
 });
@@ -122,9 +122,9 @@ router.get('/repository/:owner/:repo', async (req, res) => {
     });
   } catch (error) {
     logger.error('Failed to list bounties:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to list bounties',
-      message: error.message 
+      message: error.message
     });
   }
 });
@@ -136,8 +136,8 @@ router.post('/:bountyId/claim', async (req, res) => {
     const { solver, pullRequestUrl } = req.body;
 
     if (!solver || !pullRequestUrl) {
-      return res.status(400).json({ 
-        error: 'Missing required fields: solver, pullRequestUrl' 
+      return res.status(400).json({
+        error: 'Missing required fields: solver, pullRequestUrl'
       });
     }
 
@@ -173,9 +173,9 @@ router.post('/:bountyId/claim', async (req, res) => {
     });
   } catch (error) {
     logger.error('Failed to claim bounty:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to claim bounty',
-      message: error.message 
+      message: error.message
     });
   }
 });
@@ -221,9 +221,9 @@ router.post('/:bountyId/escalate', async (req, res) => {
     }
   } catch (error) {
     logger.error('Failed to escalate bounty:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to escalate bounty',
-      message: error.message 
+      message: error.message
     });
   }
 });
@@ -246,4 +246,4 @@ router.get('/wallet/balance', async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;

@@ -1,11 +1,11 @@
-const express = require('express');
-const crypto = require('crypto');
+import express from 'express';
+import crypto from 'crypto';
 const router = express.Router();
-const logger = require('../utils/logger');
-const Bounty = require('../models/Bounty');
-const contractService = require('../services/contract');
-const mneeService = require('../services/mnee');
-const { Octokit } = require('@octokit/rest');
+import logger from '../utils/logger.js';
+import Bounty from '../models/Bounty.js';
+import contractService from '../services/contract.js';
+import mneeService from '../services/mnee.js';
+import { Octokit } from '@octokit/rest';
 
 // Initialize Octokit
 const octokit = new Octokit({
@@ -65,13 +65,13 @@ router.post('/', async (req, res) => {
 async function handlePullRequest(event) {
   try {
     const { action, pull_request, repository } = event;
-    
+
     if (action === 'closed' && pull_request.merged) {
       logger.info(`PR #${pull_request.number} merged in ${repository.full_name}`);
-      
+
       // Check if PR references any bounty issues
       const referencedIssues = extractReferencedIssues(pull_request.body || '');
-      
+
       for (const issueNumber of referencedIssues) {
         await checkAndClaimBounty(repository.full_name, issueNumber, pull_request);
       }
@@ -85,13 +85,13 @@ async function handlePullRequest(event) {
 async function handleWorkflowRun(event) {
   try {
     const { action, workflow_run } = event;
-    
+
     if (action === 'completed' && workflow_run.conclusion === 'success') {
       // Check if this workflow run is associated with a PR
       if (workflow_run.pull_requests && workflow_run.pull_requests.length > 0) {
         const pr = workflow_run.pull_requests[0];
         logger.info(`Workflow succeeded for PR #${pr.number}`);
-        
+
         // Get full PR details
         const [owner, repo] = workflow_run.repository.full_name.split('/');
         const { data: pullRequest } = await octokit.pulls.get({
@@ -99,10 +99,10 @@ async function handleWorkflowRun(event) {
           repo,
           pull_number: pr.number
         });
-        
+
         // Check referenced issues
         const referencedIssues = extractReferencedIssues(pullRequest.body || '');
-        
+
         for (const issueNumber of referencedIssues) {
           await checkAndClaimBounty(workflow_run.repository.full_name, issueNumber, pullRequest);
         }
@@ -117,17 +117,17 @@ async function handleWorkflowRun(event) {
 async function handleIssues(event) {
   try {
     const { action, issue, repository } = event;
-    
+
     if (action === 'closed') {
       logger.info(`Issue #${issue.number} closed in ${repository.full_name}`);
-      
+
       // Check if this issue has an active bounty
       const bounty = await Bounty.findOne({
         repository: repository.full_name,
         issueId: issue.number,
         status: 'active'
       });
-      
+
       if (bounty) {
         logger.info(`Issue #${issue.number} with bounty ${bounty.bountyId} was closed manually`);
         // Optionally cancel the bounty or keep it active
@@ -141,20 +141,20 @@ async function handleIssues(event) {
 // Extract referenced issues from PR body
 function extractReferencedIssues(body) {
   const issues = new Set();
-  
+
   // Common patterns: fixes #123, closes #123, resolves #123
   const patterns = [
     /(?:fixes|closes|resolves|fix|close|resolve)\s+#(\d+)/gi,
     /(?:fixes|closes|resolves|fix|close|resolve)\s+(?:https?:\/\/github\.com\/[\w-]+\/[\w-]+\/issues\/)(\d+)/gi
   ];
-  
+
   for (const pattern of patterns) {
     let match;
     while ((match = pattern.exec(body)) !== null) {
       issues.add(parseInt(match[1]));
     }
   }
-  
+
   return Array.from(issues);
 }
 
@@ -167,14 +167,14 @@ async function checkAndClaimBounty(repository, issueNumber, pullRequest) {
       issueId: issueNumber,
       status: 'active'
     });
-    
+
     if (!bounty) {
       logger.info(`No active bounty found for ${repository}#${issueNumber}`);
       return;
     }
-    
+
     logger.info(`Found bounty ${bounty.bountyId} for ${repository}#${issueNumber}`);
-    
+
     // Verify tests are passing
     const [owner, repo] = repository.split('/');
     const { data: checkRuns } = await octokit.checks.listForRef({
@@ -182,19 +182,19 @@ async function checkAndClaimBounty(repository, issueNumber, pullRequest) {
       repo,
       ref: pullRequest.head.sha
     });
-    
+
     const allPassing = checkRuns.check_runs.every(
       run => run.conclusion === 'success' || run.conclusion === 'skipped'
     );
-    
+
     if (!allPassing) {
       logger.info(`Tests not passing for PR #${pullRequest.number}, bounty not claimed`);
       return;
     }
-    
+
     // Get PR author's MNEE address (from PR description or user profile)
     const solverAddress = await extractMneeAddress(pullRequest);
-    
+
     if (!solverAddress) {
       // Post comment asking for MNEE address
       await octokit.issues.createComment({
@@ -212,11 +212,11 @@ Once you've added your MNEE address, the bounty will be automatically released t
 
 **Note:** MNEE uses Bitcoin-style addresses. If you need help setting up an MNEE wallet, visit [docs.mnee.io](https://docs.mnee.io).`
       });
-      
+
       logger.info(`Requested MNEE address from PR author ${pullRequest.user.login}`);
       return;
     }
-    
+
     // Validate MNEE address
     const isValidAddress = await mneeService.validateAddress(solverAddress);
     if (!isValidAddress) {
@@ -234,7 +234,7 @@ For help with MNEE wallets, visit [docs.mnee.io](https://docs.mnee.io).`
       });
       return;
     }
-    
+
     // Send MNEE payment
     let paymentResult;
     try {
@@ -245,7 +245,7 @@ For help with MNEE wallets, visit [docs.mnee.io](https://docs.mnee.io).`
       );
     } catch (error) {
       logger.error(`Failed to send MNEE payment for bounty ${bounty.bountyId}:`, error);
-      
+
       await octokit.issues.createComment({
         owner,
         repo,
@@ -260,14 +260,14 @@ Please contact support if this persists.`
       });
       return;
     }
-    
+
     // Update smart contract to mark bounty as claimed
     await contractService.claimBounty(
       bounty.bountyId,
       solverAddress,
       paymentResult.transactionId
     );
-    
+
     // Update database
     bounty.status = 'claimed';
     bounty.solver = solverAddress;
@@ -276,7 +276,7 @@ Please contact support if this persists.`
     bounty.pullRequestUrl = pullRequest.html_url;
     bounty.claimedAt = new Date();
     await bounty.save();
-    
+
     // Post success comment
     await octokit.issues.createComment({
       owner,
@@ -293,7 +293,7 @@ Thank you for your contribution! 🚀
 
 The payment should appear in your MNEE wallet shortly.`
     });
-    
+
     // Close the issue
     await octokit.issues.update({
       owner,
@@ -301,7 +301,7 @@ The payment should appear in your MNEE wallet shortly.`
       issue_number: issueNumber,
       state: 'closed'
     });
-    
+
     logger.info(`Successfully claimed bounty ${bounty.bountyId} for ${pullRequest.user.login}`);
   } catch (error) {
     logger.error(`Failed to claim bounty for ${repository}#${issueNumber}:`, error);
@@ -311,30 +311,30 @@ The payment should appear in your MNEE wallet shortly.`
 // Extract MNEE address from PR description
 async function extractMneeAddress(pullRequest) {
   const body = pullRequest.body || '';
-  
+
   // Look for MNEE address in PR description
   // MNEE uses Bitcoin-style addresses
   const mneePattern = /mnee:\s*([13][a-km-zA-HJ-NP-Z1-9]{25,34})/i;
   const match = body.match(mneePattern);
-  
+
   if (match) {
     return match[1];
   }
-  
+
   // Also check for common variations
   const altPatterns = [
     /mnee\s+address:\s*([13][a-km-zA-HJ-NP-Z1-9]{25,34})/i,
     /payment\s+address:\s*([13][a-km-zA-HJ-NP-Z1-9]{25,34})/i
   ];
-  
+
   for (const pattern of altPatterns) {
     const altMatch = body.match(pattern);
     if (altMatch) {
       return altMatch[1];
     }
   }
-  
+
   return null;
 }
 
-module.exports = router;
+export default router;

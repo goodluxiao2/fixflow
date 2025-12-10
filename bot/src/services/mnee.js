@@ -1,5 +1,7 @@
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 const Mnee = require('@mnee/ts-sdk').default;
-const logger = require('../utils/logger');
+import logger from '../utils/logger.js';
 
 class MneePaymentService {
   constructor() {
@@ -16,7 +18,7 @@ class MneePaymentService {
       };
 
       this.mnee = new Mnee(config);
-      
+
       // Get MNEE configuration
       this.mneeConfig = await this.mnee.config();
       logger.info('MNEE configuration loaded:', {
@@ -61,9 +63,9 @@ class MneePaymentService {
 
       // Send the payment
       const result = await this.mnee.transfer(request, wif);
-      
+
       logger.info(`Payment sent successfully. Transaction ID: ${result.transactionId}`);
-      
+
       return {
         success: true,
         transactionId: result.transactionId,
@@ -93,7 +95,7 @@ class MneePaymentService {
       }
 
       const balance = await this.mnee.balance(address);
-      
+
       return {
         address: address,
         balance: balance.balance,
@@ -118,9 +120,9 @@ class MneePaymentService {
 
     // Convert to atomic units
     const atomicAmount = this.mnee.toAtomicAmount(amount);
-    
+
     // Find applicable fee tier
-    const feeTier = this.mneeConfig.fees.find(tier => 
+    const feeTier = this.mneeConfig.fees.find(tier =>
       atomicAmount >= tier.min && atomicAmount <= tier.max
     );
 
@@ -165,11 +167,11 @@ class MneePaymentService {
       }
 
       logger.info('Requesting MNEE from sandbox faucet...');
-      
+
       // The MNEE SDK should have a faucet method
       // This is a placeholder - check MNEE documentation for actual method
       const result = await this.mnee.faucet(address);
-      
+
       logger.info('Faucet request successful:', result);
       return result;
     } catch (error) {
@@ -179,4 +181,4 @@ class MneePaymentService {
   }
 }
 
-module.exports = new MneePaymentService();
+export default new MneePaymentService();

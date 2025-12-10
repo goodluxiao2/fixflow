@@ -1,6 +1,8 @@
-const { ethers } = require('ethers');
-const logger = require('../utils/logger');
+import { ethers } from 'ethers';
+import { createRequire } from 'module';
+import logger from '../utils/logger.js';
 
+const require = createRequire(import.meta.url);
 // Import BountyEscrow ABI (generated from compiled contract)
 const BountyEscrowABI = require('../../abi/BountyEscrow.json');
 
@@ -45,10 +47,10 @@ class ContractService {
 
     try {
       logger.info(`Creating bounty for issue ${issueId} with amount ${amount} MNEE`);
-      
+
       const gasPrice = await this.provider.getFeeData();
       const maxGasPrice = ethers.parseUnits(process.env.MAX_GAS_PRICE_GWEI || '50', 'gwei');
-      
+
       const tx = await this.bountyEscrow.createBounty(
         repository,
         issueId,
@@ -62,19 +64,19 @@ class ContractService {
       );
 
       logger.info(`Bounty creation transaction sent: ${tx.hash}`);
-      
+
       // Wait for confirmation
       const receipt = await tx.wait();
-      
+
       // Extract bounty ID from events
       const event = receipt.logs.find(
         log => log.topics[0] === ethers.id('BountyCreated(uint256,address,uint256,uint256,string)')
       );
-      
+
       const bountyId = event ? ethers.toNumber(event.topics[1]) : null;
-      
+
       logger.info(`Bounty created successfully. ID: ${bountyId}, TX: ${tx.hash}`);
-      
+
       return {
         success: true,
         bountyId,
@@ -95,19 +97,19 @@ class ContractService {
 
     try {
       logger.info(`Escalating bounty ${bountyId}`);
-      
+
       const tx = await this.bountyEscrow.escalateBounty(bountyId, {
         gasLimit: 150000
       });
-      
+
       const receipt = await tx.wait();
-      
+
       // Parse the return value to check if escalation happened
       const [escalated, newAmount] = await this.bountyEscrow.escalateBounty.staticCall(bountyId);
-      
+
       if (escalated) {
         logger.info(`Bounty ${bountyId} escalated to ${newAmount} MNEE`);
-        
+
         return {
           success: true,
           newAmount: ethers.formatUnits(newAmount, 0), // MNEE amounts are stored as integers
@@ -130,20 +132,20 @@ class ContractService {
 
     try {
       logger.info(`Marking bounty ${bountyId} as claimed for solver ${solverAddress}`);
-      
+
       const tx = await this.bountyEscrow.claimBounty(
-        bountyId, 
+        bountyId,
         solverAddress,
         paymentTxId,
         {
           gasLimit: 150000
         }
       );
-      
+
       const receipt = await tx.wait();
-      
+
       logger.info(`Bounty ${bountyId} marked as claimed successfully`);
-      
+
       return {
         success: true,
         transactionHash: tx.hash
@@ -161,7 +163,7 @@ class ContractService {
 
     try {
       const bounty = await this.bountyEscrow.getBounty(bountyId);
-      
+
       return {
         initialAmount: parseInt(bounty.initialAmount),
         currentAmount: parseInt(bounty.currentAmount),
@@ -187,7 +189,7 @@ class ContractService {
 
     try {
       const [totalBounties, activeBounties, claimedBounties] = await this.bountyEscrow.getStats();
-      
+
       return {
         totalBounties: Number(totalBounties),
         activeBounties: Number(activeBounties),
@@ -200,4 +202,4 @@ class ContractService {
   }
 }
 
-module.exports = new ContractService();
+export default new ContractService();

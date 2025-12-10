@@ -1,10 +1,11 @@
-const express = require('express');
+import express from 'express';
 const router = express.Router();
-const logger = require('../utils/logger');
-const Bounty = require('../models/Bounty');
-const contractService = require('../services/contract');
-const mneeService = require('../services/mnee');
-const escalationService = require('../services/escalation');
+import logger from '../utils/logger.js';
+import Bounty from '../models/Bounty.js';
+import db from '../db.js';
+import contractService from '../services/contract.js';
+import mneeService from '../services/mnee.js';
+import escalationService from '../services/escalation.js';
 
 // Get system metrics
 router.get('/metrics', async (req, res) => {
@@ -13,23 +14,20 @@ router.get('/metrics', async (req, res) => {
       totalBounties,
       activeBounties,
       claimedBounties,
-      totalLocked,
-      totalClaimed,
+      totalLockedRes,
+      totalClaimedRes,
       walletBalance
     ] = await Promise.all([
       Bounty.countDocuments(),
       Bounty.countDocuments({ status: 'active' }),
       Bounty.countDocuments({ status: 'claimed' }),
-      Bounty.aggregate([
-        { $match: { status: 'active' } },
-        { $group: { _id: null, total: { $sum: '$currentAmount' } } }
-      ]),
-      Bounty.aggregate([
-        { $match: { status: 'claimed' } },
-        { $group: { _id: null, total: { $sum: '$claimedAmount' } } }
-      ]),
+      db.query("SELECT SUM(current_amount) as total FROM bounties WHERE status = 'active'"),
+      db.query("SELECT SUM(claimed_amount) as total FROM bounties WHERE status = 'claimed'"),
       mneeService.getBalance()
     ]);
+
+    const totalLocked = totalLockedRes.rows[0]?.total || 0;
+    const totalClaimed = totalClaimedRes.rows[0]?.total || 0;
 
     const metrics = {
       bounties: {
@@ -39,8 +37,8 @@ router.get('/metrics', async (req, res) => {
         success_rate: totalBounties > 0 ? (claimedBounties / totalBounties * 100).toFixed(2) + '%' : '0%'
       },
       tokens: {
-        locked: totalLocked[0]?.total || 0,
-        claimed: totalClaimed[0]?.total || 0,
+        locked: parseFloat(totalLocked),
+        claimed: parseFloat(totalClaimed),
         wallet_balance: walletBalance.balance,
         wallet_address: walletBalance.address
       },
@@ -62,7 +60,7 @@ router.get('/metrics', async (req, res) => {
 router.get('/bounties', async (req, res) => {
   try {
     const { page = 1, limit = 20, status, repository } = req.query;
-    
+
     const query = {};
     if (status) query.status = status;
     if (repository) query.repository = repository;
@@ -92,44 +90,30 @@ router.get('/bounties', async (req, res) => {
 // Get bounties by repository
 router.get('/repositories', async (req, res) => {
   try {
-    const repositories = await Bounty.aggregate([
-      {
-        $group: {
-          _id: '$repository',
-          total: { $sum: 1 },
-          active: {
-            $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] }
-          },
-          claimed: {
-            $sum: { $cond: [{ $eq: ['$status', 'claimed'] }, 1, 0] }
-          },
-          totalLocked: {
-            $sum: { $cond: [{ $eq: ['$status', 'active'] }, '$currentAmount', 0] }
-          },
-          totalClaimed: {
-            $sum: { $cond: [{ $eq: ['$status', 'claimed'] }, '$claimedAmount', 0] }
-          }
-        }
-      },
-      {
-        $project: {
-          repository: '$_id',
-          _id: 0,
-          total: 1,
-          active: 1,
-          claimed: 1,
-          totalLocked: 1,
-          totalClaimed: 1,
-          success_rate: {
-            $multiply: [
-              { $divide: ['$claimed', '$total'] },
-              100
-            ]
-          }
-        }
-      },
-      { $sort: { total: -1 } }
-    ]);
+    const query = `
+      SELECT
+        repository,
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+        SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) as claimed,
+        SUM(CASE WHEN status = 'active' THEN current_amount ELSE 0 END) as "totalLocked",
+        SUM(CASE WHEN status = 'claimed' THEN claimed_amount ELSE 0 END) as "totalClaimed"
+      FROM bounties
+      GROUP BY repository
+      ORDER BY total DESC
+    `;
+
+    const { rows } = await db.query(query);
+
+    const repositories = rows.map(row => ({
+      repository: row.repository,
+      total: parseInt(row.total),
+      active: parseInt(row.active),
+      claimed: parseInt(row.claimed),
+      totalLocked: parseFloat(row.totalLocked || 0),
+      totalClaimed: parseFloat(row.totalClaimed || 0),
+      success_rate: parseInt(row.total) > 0 ? (parseInt(row.claimed) / parseInt(row.total) * 100) : 0
+    }));
 
     res.json(repositories);
   } catch (error) {
@@ -175,28 +159,27 @@ router.post('/bounties/:bountyId/escalate', async (req, res) => {
 // Get top contributors
 router.get('/contributors', async (req, res) => {
   try {
-    const contributors = await Bounty.aggregate([
-      { $match: { status: 'claimed', solver: { $ne: null } } },
-      {
-        $group: {
-          _id: '$solver',
-          bounties_claimed: { $sum: 1 },
-          total_earned: { $sum: '$claimedAmount' },
-          repositories: { $addToSet: '$repository' }
-        }
-      },
-      {
-        $project: {
-          solver: '$_id',
-          _id: 0,
-          bounties_claimed: 1,
-          total_earned: 1,
-          repositories_count: { $size: '$repositories' }
-        }
-      },
-      { $sort: { total_earned: -1 } },
-      { $limit: 50 }
-    ]);
+    const query = `
+      SELECT
+        solver,
+        COUNT(*) as bounties_claimed,
+        SUM(claimed_amount) as total_earned,
+        array_agg(DISTINCT repository) as repositories
+      FROM bounties
+      WHERE status = 'claimed' AND solver IS NOT NULL
+      GROUP BY solver
+      ORDER BY total_earned DESC
+      LIMIT 50
+    `;
+
+    const { rows } = await db.query(query);
+
+    const contributors = rows.map(row => ({
+      solver: row.solver,
+      bounties_claimed: parseInt(row.bounties_claimed),
+      total_earned: parseFloat(row.total_earned),
+      repositories_count: row.repositories ? row.repositories.length : 0
+    }));
 
     res.json(contributors);
   } catch (error) {
@@ -209,26 +192,30 @@ router.get('/contributors', async (req, res) => {
 router.get('/export', async (req, res) => {
   try {
     const { format = 'json', status } = req.query;
-    
+
     const query = {};
     if (status) query.status = status;
-    
-    const bounties = await Bounty.find(query).lean();
-    
+
+    // Use .exec() to get plain objects from QueryBuilder if I added it, but await works.
+    // However, await returns Bounty instances.
+    const bounties = await Bounty.find(query);
+    // Convert to plain objects
+    const plainBounties = bounties.map(b => b.toJSON());
+
     if (format === 'csv') {
       // Generate CSV
       const csv = [
         'BountyID,Repository,IssueID,Status,InitialAmount,CurrentAmount,Solver,ClaimedAmount,CreatedAt,ClaimedAt',
-        ...bounties.map(b => 
+        ...plainBounties.map(b =>
           `${b.bountyId},${b.repository},${b.issueId},${b.status},${b.initialAmount},${b.currentAmount},${b.solver || ''},${b.claimedAmount || ''},${b.createdAt},${b.claimedAt || ''}`
         )
       ].join('\n');
-      
+
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', 'attachment; filename=bounties.csv');
       res.send(csv);
     } else {
-      res.json(bounties);
+      res.json(plainBounties);
     }
   } catch (error) {
     logger.error('Failed to export bounties:', error);
@@ -236,4 +223,4 @@ router.get('/export', async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;

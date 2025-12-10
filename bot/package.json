@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Backend bot for Bounty Hunter system",
   "main": "src/index.js",
+  "type": "module",
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
@@ -21,7 +22,7 @@
     "helmet": "^7.1.0",
     "body-parser": "^1.20.2",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.0.3",
+    "pg": "^8.11.3",
     "@mnee/ts-sdk": "^1.0.0"
   },
   "devDependencies": {
