@@ -1,7 +1,7 @@
 import express from 'express';
 const router = express.Router();
 import logger from '../utils/logger.js';
-import contractService from '../services/contract.js';
+import bountyService from '../services/bountyService.js';
 import mneeService from '../services/mnee.js';
 import Bounty from '../models/Bounty.js';
 
@@ -17,39 +17,22 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Create bounty on blockchain
-    const result = await contractService.createBounty({
+    // Create bounty in database
+    const result = await bountyService.createBounty({
       repository,
       issueId,
       amount,
       maxAmount: maxAmount || amount * 3,
-      issueUrl
-    });
-
-    // Save to database
-    const bounty = new Bounty({
-      bountyId: result.bountyId,
-      repository,
-      issueId,
       issueUrl,
-      initialAmount: amount,
-      currentAmount: amount,
-      maxAmount: maxAmount || amount * 3,
-      transactionHash: result.transactionHash,
-      blockNumber: result.blockNumber,
-      metadata,
-      status: 'active'
+      metadata
     });
 
-    await bounty.save();
-
-    logger.info(`Bounty created: ${bounty.bountyId} for ${repository}#${issueId}`);
+    logger.info(`Bounty created: ${result.bountyId} for ${repository}#${issueId}`);
 
     res.status(201).json({
       success: true,
       bountyId: result.bountyId,
-      transactionHash: result.transactionHash,
-      contractAddress: result.contractAddress
+      transactionHash: result.transactionHash
     });
   } catch (error) {
     logger.error('Failed to create bounty:', error);
@@ -66,23 +49,12 @@ router.get('/:bountyId', async (req, res) => {
     const { bountyId } = req.params;
 
     // Get from database
-    const dbBounty = await Bounty.findOne({ bountyId });
-    if (!dbBounty) {
+    const bounty = await Bounty.findOne({ bountyId: parseInt(bountyId) });
+    if (!bounty) {
       return res.status(404).json({ error: 'Bounty not found' });
     }
 
-    // Get current state from blockchain
-    const chainBounty = await contractService.getBountyDetails(bountyId);
-
-    // Merge data
-    const bounty = {
-      ...dbBounty.toObject(),
-      currentAmount: chainBounty.currentAmount,
-      claimed: chainBounty.claimed,
-      solver: chainBounty.solver
-    };
-
-    res.json(bounty);
+    res.json(bounty.toJSON());
   } catch (error) {
     logger.error('Failed to get bounty:', error);
     res.status(500).json({
@@ -106,18 +78,18 @@ router.get('/repository/:owner/:repo', async (req, res) => {
 
     const bounties = await Bounty.find(query)
       .sort({ createdAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
+      .limit(parseInt(limit))
+      .skip((parseInt(page) - 1) * parseInt(limit));
 
     const total = await Bounty.countDocuments(query);
 
     res.json({
-      bounties,
+      bounties: bounties.map(b => b.toJSON()),
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
         total,
-        pages: Math.ceil(total / limit)
+        pages: Math.ceil(total / parseInt(limit))
       }
     });
   } catch (error) {
@@ -129,11 +101,11 @@ router.get('/repository/:owner/:repo', async (req, res) => {
   }
 });
 
-// Claim a bounty
+// Claim a bounty (internal use)
 router.post('/:bountyId/claim', async (req, res) => {
   try {
     const { bountyId } = req.params;
-    const { solver, pullRequestUrl } = req.body;
+    const { solver, pullRequestUrl, paymentTxId } = req.body;
 
     if (!solver || !pullRequestUrl) {
       return res.status(400).json({
@@ -142,7 +114,7 @@ router.post('/:bountyId/claim', async (req, res) => {
     }
 
     // Get bounty from database
-    const bounty = await Bounty.findOne({ bountyId });
+    const bounty = await Bounty.findOne({ bountyId: parseInt(bountyId) });
     if (!bounty) {
       return res.status(404).json({ error: 'Bounty not found' });
     }
@@ -151,16 +123,11 @@ router.post('/:bountyId/claim', async (req, res) => {
       return res.status(400).json({ error: 'Bounty is not active' });
     }
 
-    // Claim on blockchain
-    const result = await contractService.claimBounty(bountyId, solver);
+    // Mark bounty as claimed
+    const result = await bountyService.claimBounty(parseInt(bountyId), solver, paymentTxId);
 
     // Update database
-    bounty.status = 'claimed';
-    bounty.solver = solver;
-    bounty.claimedAmount = result.amount;
-    bounty.claimTransactionHash = result.transactionHash;
     bounty.pullRequestUrl = pullRequestUrl;
-    bounty.claimedAt = new Date();
     await bounty.save();
 
     logger.info(`Bounty ${bountyId} claimed by ${solver}`);
@@ -186,7 +153,7 @@ router.post('/:bountyId/escalate', async (req, res) => {
     const { bountyId } = req.params;
 
     // Check if bounty exists and is active
-    const bounty = await Bounty.findOne({ bountyId });
+    const bounty = await Bounty.findOne({ bountyId: parseInt(bountyId) });
     if (!bounty) {
       return res.status(404).json({ error: 'Bounty not found' });
     }
@@ -195,16 +162,10 @@ router.post('/:bountyId/escalate', async (req, res) => {
       return res.status(400).json({ error: 'Bounty is not active' });
     }
 
-    // Escalate on blockchain
-    const result = await contractService.escalateBounty(bountyId);
+    // Escalate bounty
+    const result = await bountyService.escalateBounty(parseInt(bountyId));
 
     if (result.success) {
-      // Update database
-      bounty.currentAmount = parseFloat(result.newAmount);
-      bounty.lastEscalation = new Date();
-      bounty.escalationCount = (bounty.escalationCount || 0) + 1;
-      await bounty.save();
-
       logger.info(`Bounty ${bountyId} escalated from ${result.oldAmount} to ${result.newAmount} MNEE`);
 
       res.json({

@@ -3,7 +3,6 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import bodyParser from 'body-parser';
-import { ethers } from 'ethers';
 import cron from 'node-cron';
 
 import logger from './utils/logger.js';
@@ -12,7 +11,7 @@ import bountyRoutes from './routes/bounty.js';
 import webhookRoutes from './routes/webhook.js';
 import adminRoutes from './routes/admin.js';
 import escalationService from './services/escalation.js';
-import contractService from './services/contract.js';
+import bountyService from './services/bountyService.js';
 import mneeService from './services/mnee.js';
 import db from './db.js';
 
@@ -57,28 +56,20 @@ app.use((req, res) => {
 async function connectDatabase() {
   try {
     await db.initDb();
+    logger.info('Database initialized successfully');
   } catch (error) {
     logger.error('Database initialization error:', error);
     process.exit(1);
   }
 }
 
-// Initialize blockchain connection
-async function initializeBlockchain() {
+// Initialize bounty service
+async function initializeBountyService() {
   try {
-    const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL);
-    const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-
-    // Test connection
-    const blockNumber = await provider.getBlockNumber();
-    logger.info(`Connected to Sepolia at block ${blockNumber}`);
-
-    // Initialize contract service
-    await contractService.initialize(wallet);
-
-    logger.info('Blockchain connection initialized');
+    await bountyService.initialize();
+    logger.info('Bounty service initialized');
   } catch (error) {
-    logger.error('Blockchain initialization error:', error);
+    logger.error('Bounty service initialization error:', error);
     process.exit(1);
   }
 }
@@ -111,8 +102,6 @@ async function initializeMneeService() {
 
 // Start escalation scheduler
 function startEscalationScheduler() {
-  const interval = process.env.ESCALATION_CHECK_INTERVAL || 3600000; // 1 hour default
-
   // Run every hour to check for bounties that need escalation
   cron.schedule('0 * * * *', async () => {
     logger.info('Running bounty escalation check...');
@@ -153,8 +142,8 @@ async function startServer() {
     // Connect to database
     await connectDatabase();
 
-    // Initialize blockchain
-    await initializeBlockchain();
+    // Initialize bounty service
+    await initializeBountyService();
 
     // Initialize MNEE service
     await initializeMneeService();
@@ -166,6 +155,7 @@ async function startServer() {
     const server = app.listen(PORT, () => {
       logger.info(`Bounty Hunter Bot running on port ${PORT}`);
       logger.info(`Environment: ${process.env.NODE_ENV}`);
+      logger.info('Smart contracts removed - all bounty state managed in PostgreSQL');
     });
 
     // Store server reference for graceful shutdown

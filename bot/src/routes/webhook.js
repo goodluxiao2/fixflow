@@ -3,7 +3,7 @@ import crypto from 'crypto';
 const router = express.Router();
 import logger from '../utils/logger.js';
 import Bounty from '../models/Bounty.js';
-import contractService from '../services/contract.js';
+import bountyService from '../services/bountyService.js';
 import mneeService from '../services/mnee.js';
 import { Octokit } from '@octokit/rest';
 
@@ -261,20 +261,15 @@ Please contact support if this persists.`
       return;
     }
 
-    // Update smart contract to mark bounty as claimed
-    await contractService.claimBounty(
+    // Mark bounty as claimed in our backend
+    await bountyService.claimBounty(
       bounty.bountyId,
       solverAddress,
       paymentResult.transactionId
     );
 
     // Update database
-    bounty.status = 'claimed';
-    bounty.solver = solverAddress;
-    bounty.claimedAmount = bounty.currentAmount;
-    bounty.paymentTransactionId = paymentResult.transactionId;
     bounty.pullRequestUrl = pullRequest.html_url;
-    bounty.claimedAt = new Date();
     await bounty.save();
 
     // Post success comment

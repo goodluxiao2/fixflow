@@ -3,7 +3,6 @@ const router = express.Router();
 import logger from '../utils/logger.js';
 import Bounty from '../models/Bounty.js';
 import db from '../db.js';
-import contractService from '../services/contract.js';
 import mneeService from '../services/mnee.js';
 import escalationService from '../services/escalation.js';
 
