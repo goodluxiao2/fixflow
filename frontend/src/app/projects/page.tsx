@@ -5,10 +5,11 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 import { api, Repository } from '@/lib/api';
+import { DEMO_REPOSITORIES, simulateDelay } from '@/lib/mockData';
 import { FolderKanban, GitBranch, Coins, CheckCircle, Target, ExternalLink, Plus, ArrowUpRight, Sparkles, Settings } from 'lucide-react';
 
 export default function ProjectsPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, isDemo } = useAuth();
   const router = useRouter();
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [loadingData, setLoadingData] = useState(true);
@@ -23,9 +24,18 @@ export default function ProjectsPage() {
     if (user) {
       loadRepositories();
     }
-  }, [user]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, isDemo]);
 
   const loadRepositories = async () => {
+    // Use mock data in demo mode
+    if (isDemo) {
+      await simulateDelay(400);
+      setRepositories(DEMO_REPOSITORIES as Repository[]);
+      setLoadingData(false);
+      return;
+    }
+
     try {
       const data = await api.getMyRepositories();
       setRepositories(data.repositories || []);

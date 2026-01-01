@@ -4,11 +4,11 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { Menu, X, User, LogOut, Settings, Shield, Sparkles, Target, FolderKanban, LayoutDashboard, Zap } from 'lucide-react';
+import { Menu, X, User, LogOut, Settings, Shield, Sparkles, Target, FolderKanban, LayoutDashboard, Zap, Play, Eye } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 export function Navigation() {
-  const { user, loading, login, logout } = useAuth();
+  const { user, loading, login, logout, isDemo, exitDemoMode } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
@@ -58,11 +58,28 @@ export function Navigation() {
   );
 
   return (
-    <nav className={`sticky top-0 z-50 transition-all duration-300 ${
-      scrolled 
-        ? 'glass-card rounded-none border-x-0 border-t-0' 
-        : 'bg-transparent'
-    }`}>
+    <>
+      {/* Demo Mode Banner */}
+      {isDemo && (
+        <div className="bg-gradient-to-r from-ocean-500 to-grape-500 text-white text-center py-2 px-4">
+          <div className="max-w-7xl mx-auto flex items-center justify-center gap-3 text-sm">
+            <Eye className="w-4 h-4" />
+            <span className="font-medium">Demo Mode</span>
+            <span className="hidden sm:inline text-ocean-100">— Exploring with sample data</span>
+            <button
+              onClick={exitDemoMode}
+              className="ml-3 px-3 py-1 rounded-lg bg-white/20 hover:bg-white/30 transition-colors font-medium"
+            >
+              Exit Demo
+            </button>
+          </div>
+        </div>
+      )}
+      <nav className={`sticky top-0 z-50 transition-all duration-300 ${
+        scrolled
+          ? 'glass-card rounded-none border-x-0 border-t-0'
+          : 'bg-transparent'
+      }`}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6">
         <div className="flex justify-between h-16 lg:h-18">
           {/* Logo */}
@@ -132,7 +149,13 @@ export function Navigation() {
                     </p>
                     <p className="text-xs text-warm-500">@{user.githubLogin}</p>
                   </div>
-                  {user.role === 'admin' && (
+                  {isDemo && (
+                    <span className="hidden md:flex items-center gap-1 px-2 py-0.5 rounded-full bg-ocean-100 text-ocean-700 text-xs font-medium">
+                      <Play className="w-3 h-3" />
+                      Demo
+                    </span>
+                  )}
+                  {user.role === 'admin' && !isDemo && (
                     <span className="hidden md:flex items-center gap-1 px-2 py-0.5 rounded-full bg-grape-100 text-grape-700 text-xs font-medium">
                       <Shield className="w-3 h-3" />
                       Admin
@@ -164,7 +187,13 @@ export function Navigation() {
                           <p className="text-sm text-warm-500">@{user.githubLogin}</p>
                         </div>
                       </div>
-                      {user.role === 'admin' && (
+                      {isDemo && (
+                        <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-ocean-100 text-ocean-700 text-xs font-medium">
+                          <Play className="w-3.5 h-3.5" />
+                          Demo Mode {user.role === 'admin' ? '(Admin View)' : '(User View)'}
+                        </div>
+                      )}
+                      {user.role === 'admin' && !isDemo && (
                         <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-grape-100 text-grape-700 text-xs font-medium">
                           <Shield className="w-3.5 h-3.5" />
                           System Administrator
@@ -192,18 +221,31 @@ export function Navigation() {
                       </Link>
                     </div>
 
-                    {/* Sign Out */}
+                    {/* Sign Out / Exit Demo */}
                     <div className="p-2 border-t border-warm-100">
-                      <button
-                        onClick={() => {
-                          logout();
-                          setProfileOpen(false);
-                        }}
-                        className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-red-600 hover:bg-red-50 transition-colors"
-                      >
-                        <LogOut className="w-4 h-4" />
-                        <span className="font-medium">Sign Out</span>
-                      </button>
+                      {isDemo ? (
+                        <button
+                          onClick={() => {
+                            exitDemoMode();
+                            setProfileOpen(false);
+                          }}
+                          className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-ocean-600 hover:bg-ocean-50 transition-colors"
+                        >
+                          <LogOut className="w-4 h-4" />
+                          <span className="font-medium">Exit Demo</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            logout();
+                            setProfileOpen(false);
+                          }}
+                          className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-red-600 hover:bg-red-50 transition-colors"
+                        >
+                          <LogOut className="w-4 h-4" />
+                          <span className="font-medium">Sign Out</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -327,6 +369,7 @@ export function Navigation() {
           </div>
         </div>
       )}
-    </nav>
+      </nav>
+    </>
   );
 }

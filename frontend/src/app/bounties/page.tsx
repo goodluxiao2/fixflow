@@ -1,11 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 import { api, Bounty } from '@/lib/api';
+import { MOCK_BOUNTIES, simulateDelay } from '@/lib/mockData';
 import { Search, SlidersHorizontal, ExternalLink, Clock, TrendingUp, Coins, Target, Sparkles, GitBranch, User, ChevronLeft, ChevronRight, Flame, Timer, ArrowUpRight } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 export default function BountiesPage() {
+  const { isDemo } = useAuth();
   const [bounties, setBounties] = useState<Bounty[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>('active');
@@ -15,10 +18,34 @@ export default function BountiesPage() {
 
   useEffect(() => {
     loadBounties();
-  }, [statusFilter, page]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, page, isDemo]);
 
   const loadBounties = async () => {
     setLoading(true);
+    
+    // Use mock data in demo mode
+    if (isDemo) {
+      await simulateDelay(400);
+      let filteredBounties = [...MOCK_BOUNTIES];
+      
+      // Apply status filter
+      if (statusFilter !== 'all') {
+        filteredBounties = filteredBounties.filter(b => b.status === statusFilter);
+      }
+      
+      // Paginate (12 per page)
+      const totalItems = filteredBounties.length;
+      const pages = Math.ceil(totalItems / 12);
+      const startIndex = (page - 1) * 12;
+      const paginatedBounties = filteredBounties.slice(startIndex, startIndex + 12);
+      
+      setBounties(paginatedBounties as Bounty[]);
+      setTotalPages(pages);
+      setLoading(false);
+      return;
+    }
+
     try {
       const data = await api.getAllBounties({
         status: statusFilter === 'all' ? undefined : statusFilter,

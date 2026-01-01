@@ -1,13 +1,12 @@
 import logger from '../utils/logger.js';
 import Bounty from '../models/Bounty.js';
 import bountyService from './bountyService.js';
-import { Octokit } from '@octokit/rest';
+import githubAppService from './githubApp.js';
 
 class EscalationService {
   constructor() {
-    this.octokit = new Octokit({
-      auth: process.env.GITHUB_TOKEN
-    });
+    // No longer using personal access tokens
+    // GitHub App service handles authentication
   }
 
   async checkAndEscalateBounties() {
@@ -75,7 +74,10 @@ This issue has been open for ${bounty.hoursElapsed} hours. ${this.getNextEscalat
 ---
 *Escalation ${bounty.escalationCount} triggered by [FixFlow](https://github.com/bounty-hunter/bounty-hunter)*`;
 
-      await this.octokit.issues.createComment({
+      // Use GitHub App authentication instead of personal token
+      const octokit = await githubAppService.getOctokitForRepo(owner, repo);
+      
+      await octokit.issues.createComment({
         owner,
         repo,
         issue_number: bounty.issueId,

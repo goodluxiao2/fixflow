@@ -5,16 +5,17 @@ import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/api';
-import { Save, User, Wallet, Shield, CheckCircle, AlertCircle, ExternalLink, Coins, Trophy, Calendar, Sparkles, RefreshCw } from 'lucide-react';
+import { simulateDelay } from '@/lib/mockData';
+import { Save, User, Wallet, Shield, CheckCircle, AlertCircle, ExternalLink, Coins, Trophy, Calendar, Sparkles, RefreshCw, Eye } from 'lucide-react';
 
 export default function SettingsPage() {
-  const { user, loading, refreshUser } = useAuth();
+  const { user, loading, refreshUser, isDemo } = useAuth();
   const router = useRouter();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [mneeAddress, setMneeAddress] = useState('');
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -34,6 +35,15 @@ export default function SettingsPage() {
     e.preventDefault();
     setSaving(true);
     setMessage(null);
+
+    // In demo mode, simulate saving without API call
+    if (isDemo) {
+      await simulateDelay(800);
+      setMessage({ type: 'info', text: 'Demo mode: Changes would be saved in a real account.' });
+      setTimeout(() => setMessage(null), 5000);
+      setSaving(false);
+      return;
+    }
 
     try {
       await api.updateProfile({
@@ -85,15 +95,30 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* Success/Error Message */}
+        {/* Demo Mode Notice */}
+        {isDemo && (
+          <div className="mb-6 p-4 rounded-xl flex items-center gap-3 bg-gradient-to-r from-grape-50 to-ocean-50 border border-grape-200">
+            <Eye className="w-5 h-5 text-grape-500 flex-shrink-0" />
+            <div>
+              <span className="font-medium text-grape-800">Demo Mode</span>
+              <span className="text-grape-600 ml-2">Changes won&apos;t be saved to a real account.</span>
+            </div>
+          </div>
+        )}
+
+        {/* Success/Error/Info Message */}
         {message && (
           <div className={`mb-6 p-4 rounded-xl flex items-center gap-3 animate-slide-down ${
-            message.type === 'success' 
-              ? 'bg-gradient-to-r from-green-50 to-ocean-50 border border-green-200 text-green-800' 
+            message.type === 'success'
+              ? 'bg-gradient-to-r from-green-50 to-ocean-50 border border-green-200 text-green-800'
+              : message.type === 'info'
+              ? 'bg-gradient-to-r from-ocean-50 to-grape-50 border border-ocean-200 text-ocean-800'
               : 'bg-gradient-to-r from-red-50 to-honey-50 border border-red-200 text-red-800'
           }`}>
             {message.type === 'success' ? (
               <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />
+            ) : message.type === 'info' ? (
+              <Eye className="w-5 h-5 text-ocean-500 flex-shrink-0" />
             ) : (
               <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
             )}

@@ -6,17 +6,32 @@ import Bounty from '../models/Bounty.js';
 import bountyService from '../services/bountyService.js';
 import mneeService from '../services/mnee.js';
 import githubAppService from '../services/githubApp.js';
+import db from '../db.js';
 
 // Verify GitHub webhook signature
 function verifyWebhookSignature(payload, signature) {
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
+  if (!secret) {
+    logger.warn('GITHUB_WEBHOOK_SECRET not configured');
+    return false;
+  }
   const hmac = crypto.createHmac('sha256', secret);
   const digest = 'sha256=' + hmac.update(payload).digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
+  try {
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
+  } catch {
+    return false;
+  }
 }
 
-// GitHub webhook endpoint
-router.post('/', async (req, res) => {
+// Verify API key for GitHub Actions
+function verifyApiKey(req) {
+  const apiKey = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
+  return apiKey && apiKey === process.env.API_KEY;
+}
+
+// GitHub webhook endpoint - receives events from GitHub
+router.post('/github', async (req, res) => {
   try {
     // Verify signature
     const signature = req.headers['x-hub-signature-256'];
@@ -59,6 +74,273 @@ router.post('/', async (req, res) => {
   } catch (error) {
     logger.error('Webhook processing error:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Create Bounty Webhook - Called by GitHub Actions to create a bounty for failed tests
+ *
+ * POST /webhooks/create-bounty
+ *
+ * Request Body:
+ * {
+ *   "repository": "owner/repo",
+ *   "runId": 123456789,
+ *   "jobName": "test",
+ *   "failureUrl": "https://github.com/owner/repo/actions/runs/123456789",
+ *   "issueNumber": 123,
+ *   "issueUrl": "https://github.com/owner/repo/issues/123",
+ *   "errorLog": "Test output...",
+ *   "testFile": "tests/test_auth.py",
+ *   "testName": "test_user_login",
+ *   "bountyAmount": 50,
+ *   "maxAmount": 150
+ * }
+ */
+router.post('/create-bounty', async (req, res) => {
+  try {
+    // Verify API key
+    if (!verifyApiKey(req)) {
+      return res.status(401).json({ error: 'Invalid or missing API key' });
+    }
+
+    const {
+      repository,
+      runId,
+      jobName,
+      failureUrl,
+      issueNumber,
+      issueUrl,
+      errorLog,
+      testFile,
+      testName,
+      bountyAmount,
+      maxAmount
+    } = req.body;
+
+    // Validate required fields
+    if (!repository || !bountyAmount) {
+      return res.status(400).json({
+        error: 'Missing required fields: repository, bountyAmount'
+      });
+    }
+
+    logger.info(`Create bounty request for ${repository} - amount: ${bountyAmount} MNEE`);
+
+    let finalIssueUrl = issueUrl;
+    let finalIssueNumber = issueNumber;
+
+    // If no issue exists, create one via GitHub App
+    if (!issueNumber || !issueUrl) {
+      try {
+        const [owner, repo] = repository.split('/');
+        const octokit = await githubAppService.getOctokitForRepo(owner, repo);
+        
+        // Create issue for the failing test
+        const issueTitle = testName
+          ? `🐛 Failing Test: ${testName}`
+          : `🐛 CI/CD Failure in ${jobName || 'workflow'}`;
+        
+        const issueBody = `## Automated Bounty Issue
+
+A failing test has been detected and a bounty has been created.
+
+**Repository:** ${repository}
+**Workflow Run:** ${runId ? `[View Run](${failureUrl})` : 'N/A'}
+**Test File:** ${testFile || 'N/A'}
+**Test Name:** ${testName || 'N/A'}
+
+### Bounty Details
+- **Initial Amount:** ${bountyAmount} MNEE
+- **Maximum Amount:** ${maxAmount || bountyAmount * 3} MNEE
+- **Escalation:** Amount increases over time until fixed
+
+### Error Log
+\`\`\`
+${errorLog ? errorLog.slice(0, 2000) : 'No error log provided'}
+\`\`\`
+
+### How to Claim
+1. Fork this repository
+2. Fix the failing test
+3. Create a PR that references this issue (e.g., "Fixes #${'{issueNumber}'}")
+4. Add your MNEE address to the PR description: \`MNEE: youraddress\`
+5. Once merged and tests pass, payment is automatic!
+
+---
+*This issue was created by [FixFlow Bot](https://github.com/bounty-hunter/bounty-hunter)*`;
+
+        const { data: issue } = await octokit.issues.create({
+          owner,
+          repo,
+          title: issueTitle,
+          body: issueBody,
+          labels: ['bounty', 'bug', 'help wanted']
+        });
+
+        finalIssueNumber = issue.number;
+        finalIssueUrl = issue.html_url;
+
+        logger.info(`Created issue #${issue.number} for bounty in ${repository}`);
+      } catch (error) {
+        logger.error('Failed to create GitHub issue:', error);
+        return res.status(500).json({
+          error: 'Failed to create GitHub issue',
+          message: error.message
+        });
+      }
+    }
+
+    // Create the bounty
+    const result = await bountyService.createBounty({
+      repository,
+      issueId: finalIssueNumber,
+      amount: bountyAmount,
+      maxAmount: maxAmount || bountyAmount * 3,
+      issueUrl: finalIssueUrl,
+      metadata: {
+        runId,
+        jobName,
+        failureUrl,
+        errorLog: errorLog?.slice(0, 5000), // Limit stored error log
+        testFile,
+        testName
+      }
+    });
+
+    // Post comment on the issue announcing the bounty
+    try {
+      const [owner, repo] = repository.split('/');
+      const octokit = await githubAppService.getOctokitForRepo(owner, repo);
+      
+      await octokit.issues.createComment({
+        owner,
+        repo,
+        issue_number: finalIssueNumber,
+        body: `💰 **Bounty Created!**
+
+A bounty of **${bountyAmount} MNEE** has been placed on this issue.
+
+**How to claim:**
+1. Fix the issue and create a PR
+2. Reference this issue in your PR (e.g., "Fixes #${finalIssueNumber}")
+3. Add your MNEE address: \`MNEE: your_address_here\`
+
+The bounty will increase over time if not claimed. Maximum: ${maxAmount || bountyAmount * 3} MNEE.
+
+Good luck! 🚀`
+      });
+    } catch (error) {
+      logger.warn('Failed to post bounty comment:', error.message);
+      // Don't fail the request for this
+    }
+
+    logger.info(`Bounty created: ${result.bountyId} for ${repository}#${finalIssueNumber}`);
+
+    res.status(201).json({
+      success: true,
+      bountyId: result.bountyId,
+      issueNumber: finalIssueNumber,
+      issueUrl: finalIssueUrl,
+      amount: bountyAmount,
+      maxAmount: maxAmount || bountyAmount * 3
+    });
+  } catch (error) {
+    logger.error('Failed to create bounty via webhook:', error);
+    res.status(500).json({
+      error: 'Failed to create bounty',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * MNEE Status Webhook - Receives transaction status updates from MNEE
+ *
+ * POST /webhooks/mnee-status
+ *
+ * Request Body:
+ * {
+ *   "ticketId": "abc123",
+ *   "status": "SUCCESS",
+ *   "tx_id": "transaction123",
+ *   "errors": null
+ * }
+ */
+router.post('/mnee-status', async (req, res) => {
+  try {
+    const { ticketId, status, tx_id, errors } = req.body;
+
+    logger.info(`MNEE status webhook: ticketId=${ticketId}, status=${status}`);
+
+    if (!ticketId) {
+      return res.status(400).json({ error: 'Missing ticketId' });
+    }
+
+    // Find bounty by payment ticket ID
+    const { rows } = await db.query(
+      'SELECT * FROM bounties WHERE claim_transaction_hash LIKE $1',
+      [`%${ticketId}%`]
+    );
+
+    if (!rows[0]) {
+      logger.warn(`No bounty found for ticketId: ${ticketId}`);
+      return res.status(404).json({ error: 'Bounty not found for this ticket' });
+    }
+
+    const bounty = Bounty.fromRow(rows[0]);
+
+    // Update based on status
+    if (status === 'SUCCESS' || status === 'MINED') {
+      await db.query(
+        'UPDATE bounties SET claim_transaction_hash = $1, updated_at = $2 WHERE id = $3',
+        [tx_id, new Date(), rows[0].id]
+      );
+
+      // Notify on GitHub
+      try {
+        const [owner, repo] = bounty.repository.split('/');
+        const octokit = await githubAppService.getOctokitForRepo(owner, repo);
+        
+        await octokit.issues.createComment({
+          owner,
+          repo,
+          issue_number: bounty.issueId,
+          body: `✅ **Payment Confirmed!**\n\nTransaction ID: \`${tx_id}\`\n\nThe MNEE payment has been successfully processed.`
+        });
+      } catch (error) {
+        logger.warn('Failed to post payment confirmation comment:', error.message);
+      }
+
+      logger.info(`Payment confirmed for bounty ${bounty.bountyId}: ${tx_id}`);
+    } else if (status === 'FAILED') {
+      await db.query(
+        'UPDATE bounties SET metadata = metadata || $1, updated_at = $2 WHERE id = $3',
+        [JSON.stringify({ payment_error: errors }), new Date(), rows[0].id]
+      );
+
+      // Notify failure on GitHub
+      try {
+        const [owner, repo] = bounty.repository.split('/');
+        const octokit = await githubAppService.getOctokitForRepo(owner, repo);
+        
+        await octokit.issues.createComment({
+          owner,
+          repo,
+          issue_number: bounty.issueId,
+          body: `❌ **Payment Failed**\n\nThere was an issue processing the MNEE payment. Our team has been notified.\n\nError: ${errors || 'Unknown error'}\n\nPlease contact support if this persists.`
+        });
+      } catch (error) {
+        logger.warn('Failed to post payment failure comment:', error.message);
+      }
+
+      logger.error(`Payment failed for bounty ${bounty.bountyId}: ${errors}`);
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('MNEE status webhook error:', error);
+    res.status(500).json({ error: 'Internal error' });
   }
 });
 

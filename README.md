@@ -48,16 +48,21 @@ Setting this up takes about ten minutes.
 First, create a PostgreSQL database for FixFlow:
 
 ```bash
-createdb bounty_hunter_bot
+createdb bounty_hunter
 ```
 
 Then clone the repository, install dependencies, and configure your environment:
 
 ```bash
-cd bot
+cd bounty-hunter/bot
 npm install
 cp .env.example .env
 # Edit .env with your database connection, GitHub App credentials, and MNEE API key
+
+# Initialize the database tables
+npm run db:init
+
+# Start the server
 npm start
 ```
 

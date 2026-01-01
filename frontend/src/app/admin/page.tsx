@@ -5,11 +5,12 @@ import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { useAuth } from '@/contexts/AuthContext';
 import { api, Bounty, Metrics, User } from '@/lib/api';
+import { MOCK_BOUNTIES, MOCK_USERS, MOCK_METRICS, simulateDelay } from '@/lib/mockData';
 import { Coins, Users, Activity, Database, RefreshCw, AlertTriangle, Shield, Wallet, TrendingUp, Clock, Zap, Target, GitBranch, ExternalLink, Server, Award } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 export default function AdminPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, isDemo } = useAuth();
   const router = useRouter();
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [bounties, setBounties] = useState<Bounty[]>([]);
@@ -28,10 +29,25 @@ export default function AdminPage() {
     if (user?.role === 'admin') {
       loadData();
     }
-  }, [user]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, isDemo]);
 
   const loadData = async () => {
     setLoadingData(true);
+    
+    // Use mock data in demo mode
+    if (isDemo) {
+      await simulateDelay(500);
+      setMetrics(MOCK_METRICS as Metrics);
+      setBounties(MOCK_BOUNTIES.slice(0, 10) as Bounty[]);
+      setUsers(MOCK_USERS as User[]);
+      // Filter bounties eligible for escalation in demo
+      const eligibleBounties = MOCK_BOUNTIES.filter(b => b.isEligibleForEscalation);
+      setEligibleForEscalation(eligibleBounties as Bounty[]);
+      setLoadingData(false);
+      return;
+    }
+
     try {
       const [metricsData, bountiesData, usersData, escalationData] = await Promise.all([
         api.getMetrics(),
@@ -52,6 +68,15 @@ export default function AdminPage() {
 
   const handleEscalation = async () => {
     setEscalating(true);
+    
+    // Simulate escalation in demo mode
+    if (isDemo) {
+      await simulateDelay(1500);
+      alert(`Demo: ${eligibleForEscalation.length} bounties would be escalated`);
+      setEscalating(false);
+      return;
+    }
+
     try {
       const result = await api.triggerEscalationCheck();
       alert(`Escalation complete: ${result.escalated} bounties escalated`);

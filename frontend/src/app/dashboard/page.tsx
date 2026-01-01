@@ -6,6 +6,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useAuth } from '@/contexts/AuthContext';
 import { api, Bounty } from '@/lib/api';
+import { MOCK_BOUNTIES, MOCK_STATS, simulateDelay } from '@/lib/mockData';
 import { Coins, CheckCircle, Clock, ExternalLink, TrendingUp, Sparkles, AlertCircle, ArrowUpRight, Wallet, GitPullRequest, Trophy, Target, Zap } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -17,7 +18,7 @@ interface UserStats {
 }
 
 export default function DashboardPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, isDemo } = useAuth();
   const router = useRouter();
   const [stats, setStats] = useState<UserStats | null>(null);
   const [bounties, setBounties] = useState<Bounty[]>([]);
@@ -33,9 +34,23 @@ export default function DashboardPage() {
     if (user) {
       loadData();
     }
-  }, [user]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, isDemo]);
 
   const loadData = async () => {
+    // Use mock data in demo mode
+    if (isDemo) {
+      await simulateDelay(500);
+      setStats(MOCK_STATS);
+      // Get bounties claimed by the current demo user
+      const userBounties = MOCK_BOUNTIES.filter(b =>
+        b.claimedBy === user?.githubLogin || b.status === 'active'
+      ).slice(0, 10);
+      setBounties(userBounties as Bounty[]);
+      setLoadingData(false);
+      return;
+    }
+
     try {
       const [statsData, bountiesData] = await Promise.all([
         api.getMyStats(),

@@ -1,6 +1,7 @@
 import { App } from '@octokit/app';
 import { Octokit } from '@octokit/rest';
 import fs from 'fs';
+import path from 'path';
 import logger from '../utils/logger.js';
 import db from '../db.js';
 
@@ -11,26 +12,55 @@ class GitHubAppService {
   }
 
   async initialize() {
+    logger.debug('Initializing GitHub App service...');
+    
     try {
       const appId = process.env.GITHUB_APP_ID;
       const privateKeyPath = process.env.GITHUB_APP_PRIVATE_KEY_PATH;
       const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
 
-      if (!appId || !privateKeyPath) {
-        throw new Error('Missing GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY_PATH');
+      logger.debug('GitHub App configuration', {
+        appId,
+        privateKeyPath,
+        hasWebhookSecret: !!webhookSecret,
+        hasInlineKey: !!process.env.GITHUB_APP_PRIVATE_KEY
+      });
+
+      if (!appId) {
+        throw new Error('GITHUB_APP_ID is not set in environment variables');
+      }
+      
+      if (!privateKeyPath && !process.env.GITHUB_APP_PRIVATE_KEY) {
+        throw new Error('Either GITHUB_APP_PRIVATE_KEY_PATH or GITHUB_APP_PRIVATE_KEY must be set');
       }
 
       // Read private key from file
       let privateKey;
-      if (fs.existsSync(privateKeyPath)) {
-        privateKey = fs.readFileSync(privateKeyPath, 'utf-8');
+      if (privateKeyPath && fs.existsSync(privateKeyPath)) {
+        const resolvedPath = path.resolve(privateKeyPath);
+        logger.debug('Reading private key from file', { path: resolvedPath });
+        privateKey = fs.readFileSync(resolvedPath, 'utf-8');
+        logger.debug('Private key loaded', {
+          length: privateKey.length,
+          startsWithBegin: privateKey.startsWith('-----BEGIN')
+        });
       } else if (process.env.GITHUB_APP_PRIVATE_KEY) {
+        logger.debug('Using inline private key from environment');
         // Alternatively, allow inline private key via env var
         privateKey = process.env.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, '\n');
       } else {
+        // List files in current directory for debugging
+        const cwd = process.cwd();
+        const files = fs.readdirSync(cwd);
+        logger.error('Private key file not found', {
+          path: privateKeyPath,
+          cwd,
+          filesInCwd: files.filter(f => f.endsWith('.pem'))
+        });
         throw new Error(`Private key file not found: ${privateKeyPath}`);
       }
 
+      logger.debug('Creating GitHub App instance...');
       this.app = new App({
         appId,
         privateKey,
@@ -40,9 +70,12 @@ class GitHubAppService {
       });
 
       this.initialized = true;
-      logger.info('GitHub App service initialized');
+      logger.info('GitHub App service initialized successfully', { appId });
     } catch (error) {
-      logger.error('Failed to initialize GitHub App service:', error);
+      logger.error('Failed to initialize GitHub App service', {
+        error: error.message,
+        stack: error.stack
+      });
       throw error;
     }
   }
@@ -53,15 +86,23 @@ class GitHubAppService {
    * @returns {Promise<Octokit>} Authenticated Octokit instance
    */
   async getInstallationOctokit(installationId) {
+    logger.debug('Getting Octokit for installation', { installationId });
+    
     if (!this.initialized) {
+      logger.debug('GitHub App not initialized, initializing now...');
       await this.initialize();
     }
 
     try {
       const octokit = await this.app.getInstallationOctokit(installationId);
+      logger.debug('Octokit instance created for installation', { installationId });
       return octokit;
     } catch (error) {
-      logger.error(`Failed to get Octokit for installation ${installationId}:`, error);
+      logger.error('Failed to get Octokit for installation', {
+        installationId,
+        error: error.message,
+        status: error.status
+      });
       throw error;
     }
   }
@@ -73,21 +114,31 @@ class GitHubAppService {
    * @returns {Promise<Octokit>} Authenticated Octokit instance
    */
   async getOctokitForRepo(owner, repo) {
+    logger.debug('Getting Octokit for repository', { owner, repo });
+    
     if (!this.initialized) {
+      logger.debug('GitHub App not initialized, initializing now...');
       await this.initialize();
     }
 
     try {
       // First, try to find the installation in our database
+      logger.debug('Looking up installation in database', { owner });
       const { rows } = await db.query(
         'SELECT installation_id FROM github_installations WHERE account_login = $1',
         [owner]
       );
 
       if (rows.length > 0) {
+        logger.debug('Found installation in database', {
+          owner,
+          installationId: rows[0].installation_id
+        });
         return await this.getInstallationOctokit(rows[0].installation_id);
       }
 
+      logger.debug('Installation not in database, fetching from GitHub API', { owner, repo });
+      
       // If not in database, try to get it from GitHub API
       // This requires app-level authentication
       const appOctokit = new Octokit({
@@ -100,12 +151,23 @@ class GitHubAppService {
         repo
       });
 
+      logger.debug('Found installation from GitHub API', {
+        installationId: installation.id,
+        account: installation.account?.login
+      });
+
       // Store installation in database
       await this.saveInstallation(installation);
 
       return await this.getInstallationOctokit(installation.id);
     } catch (error) {
-      logger.error(`Failed to get Octokit for repo ${owner}/${repo}:`, error);
+      logger.error('Failed to get Octokit for repo', {
+        owner,
+        repo,
+        error: error.message,
+        status: error.status,
+        hint: error.status === 404 ? 'GitHub App may not be installed on this repository' : undefined
+      });
       throw error;
     }
   }
