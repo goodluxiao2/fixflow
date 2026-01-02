@@ -22,17 +22,8 @@ FROM base AS deps
 COPY package*.json ./
 
 # Install production dependencies only
-RUN npm ci --only=production && npm cache clean --force
-
-# ============================================
-# Builder Stage (for any build steps if needed)
-# ============================================
-FROM base AS builder
-
-COPY package*.json ./
-RUN npm ci
-
-COPY . .
+# Use npm install with --omit=dev since package-lock.json may not exist
+RUN npm install --omit=dev && npm cache clean --force
 
 # ============================================
 # Production Stage
