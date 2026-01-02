@@ -23,8 +23,8 @@ jobs:
         id: bounty
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          bot_server_url: ${{ secrets.FIXFLOW_SERVER_URL }}
-          bot_api_key: ${{ secrets.FIXFLOW_API_KEY }}
+          bot_server_url: ${{ secrets.BOUNTY_HUNTER_SERVER_URL }}
+          bot_api_key: ${{ secrets.BOUNTY_HUNTER_API_KEY }}
           bounty_amount: 50
           max_bounty: 150
           config_file: .fixflow.yml
