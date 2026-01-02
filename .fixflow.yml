@@ -1,0 +1,35 @@
+# FixFlow Bounty Configuration
+# This file configures how bounties are created for this repository
+
+bounty_config:
+  # Default bounty amount in MNEE (USD-pegged stablecoin)
+  default_amount: 50
+  
+  # Maximum bounty amount after escalation
+  max_bounty: 200
+  
+  # Severity-based multipliers
+  # Apply bounty:critical, bounty:high, etc. labels to issues
+  severity_multipliers:
+    critical: 4.0   # 200 MNEE for critical bugs
+    high: 2.0       # 100 MNEE for high severity
+    medium: 1.0     # 50 MNEE for medium (default)
+    low: 0.5        # 25 MNEE for low priority
+  
+  # Escalation schedule (bounty increases over time)
+  escalation:
+    enabled: true
+    schedule:
+      - after_hours: 24
+        increase_percent: 20
+      - after_hours: 72
+        increase_percent: 50
+      - after_hours: 168  # 1 week
+        increase_percent: 100
+
+# Labels to automatically add to bounty issues
+labels:
+  - bounty
+  - bug
+  - automated
+  - good-first-issue

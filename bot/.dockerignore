@@ -1,0 +1,52 @@
+# FixFlow Bot .dockerignore
+# Exclude files not needed in Docker build context
+
+# Dependencies
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Private keys and secrets
+*.pem
+*.key
+bounty-hunter-bot.pem
+
+# Logs
+*.log
+logs
+combined.log
+error.log
+
+# Testing
+test/
+coverage/
+.nyc_output/
+
+# Development
+.git
+.gitignore
+.vscode
+.idea
+*.md
+!README.md
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# IDE
+.editorconfig
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/

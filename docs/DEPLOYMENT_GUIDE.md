@@ -1,11 +1,18 @@
 # FixFlow Deployment Guide
 
-This guide walks you through deploying the FixFlow system to production.
+This guide walks you through deploying the FixFlow system to production using Docker on an EC2 instance with Nginx and SSL.
 
 ## Table of Contents
 - [Prerequisites](#prerequisites)
-- [Database Setup](#database-setup)
-- [Bot Server Deployment](#bot-server-deployment)
+- [Docker Deployment (Recommended)](#docker-deployment-recommended)
+  - [EC2 Server Setup](#ec2-server-setup)
+  - [Docker Installation](#docker-installation)
+  - [AWS RDS Database Setup](#aws-rds-database-setup)
+  - [Environment Configuration](#environment-configuration)
+  - [Building and Running Containers](#building-and-running-containers)
+  - [Nginx Setup as Reverse Proxy](#nginx-setup-as-reverse-proxy)
+  - [SSL Setup with Let's Encrypt](#ssl-setup-with-lets-encrypt)
+- [Traditional Deployment](#traditional-deployment)
 - [GitHub App Setup](#github-app-setup)
 - [MNEE Configuration](#mnee-configuration)
 - [Monitoring Setup](#monitoring-setup)
@@ -15,57 +22,584 @@ This guide walks you through deploying the FixFlow system to production.
 
 Before deploying, ensure you have:
 
-1. **PostgreSQL Database**
-   - Production PostgreSQL instance
-   - Secure connection credentials
-   - Backup strategy in place
+1. **EC2 Instance**
+   - Ubuntu 22.04 LTS or Amazon Linux 2023
+   - Minimum t3.small (2 vCPU, 2GB RAM)
+   - At least 20GB storage
+   - Security group with ports 22, 80, 443 open
 
-2. **MNEE Account**
+2. **AWS RDS PostgreSQL**
+   - PostgreSQL 14+ instance
+   - Security group allowing access from EC2
+   - Database credentials
+
+3. **Domain Name**
+   - Domain pointing to EC2 public IP
+   - Separate subdomains for API and frontend (optional)
+
+4. **GitHub App**
+   - Created and configured
+   - App ID and private key downloaded
+
+5. **MNEE Account**
    - Production API key
    - Funded MNEE wallet
    - Wallet private key (WIF format)
 
-3. **GitHub App**
-   - Created and configured
-   - App ID and private key
+---
 
-4. **Infrastructure**
-   - Node.js server (v18+)
-   - Domain with SSL
-   - Minimum 2GB RAM
+## Docker Deployment (Recommended)
 
-## Database Setup
+### EC2 Server Setup
 
-### 1. Create Production Database
+#### 1. Connect to Your EC2 Instance
 
 ```bash
-# For cloud providers (e.g., AWS RDS, Google Cloud SQL)
-# Follow provider-specific instructions
-
-# For self-hosted PostgreSQL
-sudo -u postgres psql
-CREATE DATABASE bounty_hunter_prod;
-CREATE USER bounty_prod WITH ENCRYPTED PASSWORD 'strong_password';
-GRANT ALL PRIVILEGES ON DATABASE bounty_hunter_prod TO bounty_prod;
-\q
+ssh -i your-key.pem ubuntu@your-ec2-ip
 ```
 
-### 2. Configure SSL Connection
+#### 2. Update System Packages
 
 ```bash
-# Download SSL certificate from provider
-# Update connection string with SSL parameters
-DATABASE_URL="postgresql://user:pass@host:5432/db?sslmode=require&sslcert=client-cert.pem"
+sudo apt update && sudo apt upgrade -y
 ```
 
-### 3. Run Migrations
+#### 3. Install Required Packages
 
 ```bash
-cd bounty-hunter/bot
-npm run db:migrate:prod
+sudo apt install -y git curl wget
 ```
 
-## Bot Server Deployment
+### Docker Installation
+
+#### 1. Install Docker
+
+```bash
+# Add Docker's official GPG key
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+# Add Docker repository
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Add current user to docker group
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+#### 2. Verify Docker Installation
+
+```bash
+docker --version
+docker compose version
+```
+
+### AWS RDS Database Setup
+
+#### 1. Create RDS PostgreSQL Instance
+
+1. Go to AWS Console > RDS > Create database
+2. Select PostgreSQL (version 14+)
+3. Choose appropriate instance size (db.t3.micro for testing, db.t3.small+ for production)
+4. Configure:
+   - **DB instance identifier**: fixflow-db
+   - **Master username**: fixflow
+   - **Master password**: (generate a strong password)
+   - **Database name**: fixflow
+
+#### 2. Configure Security Group
+
+Ensure your RDS security group allows inbound connections on port 5432 from your EC2 instance:
+
+```bash
+# Example: Allow from EC2 security group or specific IP
+Inbound Rule:
+  Type: PostgreSQL
+  Port: 5432
+  Source: sg-xxxxxx (your EC2 security group)
+```
+
+#### 3. Get Connection Details
+
+After RDS is available, note the endpoint:
+```
+Endpoint: fixflow-db.xxxxxxxxx.us-east-1.rds.amazonaws.com
+Port: 5432
+```
+
+Your connection string will be:
+```
+postgresql://fixflow:your_password@fixflow-db.xxxxxxxxx.us-east-1.rds.amazonaws.com:5432/fixflow?sslmode=require
+```
+
+### Environment Configuration
+
+#### 1. Clone the Repository
+
+```bash
+cd /home/ubuntu
+git clone https://github.com/your-org/bounty-hunter.git
+cd bounty-hunter
+```
+
+#### 2. Create Production Environment File
+
+Create a `.env` file in the `bounty-hunter` directory:
+
+```bash
+nano .env
+```
+
+Add the following configuration:
+
+```env
+# ============================================
+# FixFlow Production Environment Configuration
+# ============================================
+
+# Server Configuration
+NODE_ENV=production
+PORT=3000
+
+# Bot Server URLs
+BOT_URL=https://api.yourdomain.com
+FRONTEND_URL=https://yourdomain.com
+
+# Database (AWS RDS PostgreSQL)
+DATABASE_URL=postgresql://fixflow:your_password@fixflow-db.xxxxxxxxx.us-east-1.rds.amazonaws.com:5432/fixflow?sslmode=require
+
+# Security Keys (generate with: openssl rand -hex 32)
+API_KEY=your_api_key_for_github_actions
+JWT_SECRET=your_jwt_secret_here
+ADMIN_API_KEY=your_admin_api_key_here
+
+# GitHub App Configuration
+GITHUB_APP_ID=your_github_app_id
+GITHUB_APP_NAME=fixflow-bot
+GITHUB_WEBHOOK_SECRET=your_webhook_secret
+GITHUB_APP_CLIENT_ID=your_github_app_client_id
+GITHUB_APP_CLIENT_SECRET=your_github_app_client_secret
+GITHUB_APP_SETUP_REDIRECT_URL=https://yourdomain.com/dashboard
+GITHUB_APP_OAUTH_REDIRECT_URL=https://yourdomain.com/auth/callback
+
+# GitHub App Private Key (raw with \n for newlines)
+GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----"
+
+# MNEE Payment Service
+MNEE_ENVIRONMENT=production
+MNEE_API_KEY=your_mnee_api_key
+MNEE_BOT_ADDRESS=your_mnee_wallet_address
+MNEE_BOT_WIF=your_mnee_wallet_private_key_wif
+
+# Frontend
+NEXT_PUBLIC_API_URL=https://api.yourdomain.com
+
+# Logging
+LOG_LEVEL=info
+
+# Escalation (check every hour)
+ESCALATION_CHECK_INTERVAL=3600000
+```
+
+#### 3. Create GitHub App Private Key File (Alternative Method)
+
+If you prefer using a file for the private key:
+
+```bash
+# Create secrets directory
+mkdir -p secrets
+
+# Copy your private key
+nano secrets/github-app.pem
+# Paste your private key content
+
+# Update docker-compose to mount the file
+```
+
+### Building and Running Containers
+
+#### 1. Build Docker Images
+
+```bash
+cd /home/ubuntu/bounty-hunter
+
+# Build all services
+docker compose build
+```
+
+#### 2. Start Services
+
+```bash
+# Start all services in detached mode
+docker compose up -d
+```
+
+#### 3. Verify Services are Running
+
+```bash
+# Check container status
+docker compose ps
+
+# View logs
+docker compose logs -f
+
+# Check specific service logs
+docker compose logs bot -f
+docker compose logs frontend -f
+```
+
+#### 4. Run Database Migrations
+
+```bash
+# Execute migration inside bot container
+docker compose exec bot npm run db:migrate:prod
+```
+
+### Nginx Setup as Reverse Proxy
+
+#### 1. Install Nginx
+
+```bash
+sudo apt install -y nginx
+```
+
+#### 2. Create Nginx Configuration
+
+Create the main site configuration:
+
+```bash
+sudo nano /etc/nginx/sites-available/fixflow
+```
+
+Add the following configuration:
+
+```nginx
+# ============================================
+# FixFlow Nginx Configuration
+# Reverse proxy for Docker containers
+# ============================================
+
+# Rate limiting zone
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=webhook_limit:10m rate=30r/s;
+
+# Upstream definitions
+upstream fixflow_api {
+    server 127.0.0.1:3000;
+    keepalive 32;
+}
+
+upstream fixflow_frontend {
+    server 127.0.0.1:3001;
+    keepalive 32;
+}
+
+# HTTP - Redirect all to HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name yourdomain.com api.yourdomain.com;
+
+    # Allow Let's Encrypt ACME challenge
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    # Redirect all other requests to HTTPS
+    location / {
+        return 301 https://$server_name$request_uri;
+    }
+}
+
+# API Server (api.yourdomain.com)
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name api.yourdomain.com;
+
+    # SSL Configuration (will be added by Certbot)
+    ssl_certificate /etc/letsencrypt/live/api.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.yourdomain.com/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # Logging
+    access_log /var/log/nginx/fixflow-api-access.log;
+    error_log /var/log/nginx/fixflow-api-error.log;
+
+    # Client body size for webhooks
+    client_max_body_size 10M;
+
+    # Timeouts
+    proxy_connect_timeout 60s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
+
+    # API endpoints
+    location / {
+        limit_req zone=api_limit burst=20 nodelay;
+
+        proxy_pass http://fixflow_api;
+        proxy_http_version 1.1;
+        
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+
+    # GitHub Webhooks (higher rate limit)
+    location /webhooks/github {
+        limit_req zone=webhook_limit burst=50 nodelay;
+
+        proxy_pass http://fixflow_api/webhooks/github;
+        proxy_http_version 1.1;
+        
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-GitHub-Event $http_x_github_event;
+        proxy_set_header X-GitHub-Delivery $http_x_github_delivery;
+        proxy_set_header X-Hub-Signature $http_x_hub_signature;
+        proxy_set_header X-Hub-Signature-256 $http_x_hub_signature_256;
+        
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+
+    # Health check endpoint (no rate limit)
+    location /health {
+        proxy_pass http://fixflow_api/health;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+}
+
+# Frontend Server (yourdomain.com)
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name yourdomain.com;
+
+    # SSL Configuration (will be added by Certbot)
+    ssl_certificate /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.yourdomain.com;" always;
+
+    # Logging
+    access_log /var/log/nginx/fixflow-frontend-access.log;
+    error_log /var/log/nginx/fixflow-frontend-error.log;
+
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml;
+    gzip_disable "MSIE [1-6]\.";
+
+    location / {
+        proxy_pass http://fixflow_frontend;
+        proxy_http_version 1.1;
+        
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    # Static file caching
+    location /_next/static {
+        proxy_pass http://fixflow_frontend/_next/static;
+        proxy_http_version 1.1;
+        
+        # Cache static assets for 1 year
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+}
+```
+
+#### 3. Enable the Site
+
+```bash
+# Create symbolic link
+sudo ln -s /etc/nginx/sites-available/fixflow /etc/nginx/sites-enabled/
+
+# Remove default site
+sudo rm -f /etc/nginx/sites-enabled/default
+
+# Test configuration
+sudo nginx -t
+
+# Reload Nginx
+sudo systemctl reload nginx
+```
+
+### SSL Setup with Let's Encrypt
+
+#### 1. Install Certbot
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+```
+
+#### 2. Create ACME Challenge Directory
+
+```bash
+sudo mkdir -p /var/www/certbot
+```
+
+#### 3. Obtain SSL Certificates
+
+**Option A: Single Domain (if using same domain for API and frontend)**
+
+```bash
+sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
+```
+
+**Option B: Separate Subdomains (Recommended)**
+
+First, create a temporary Nginx config without SSL:
+
+```bash
+sudo nano /etc/nginx/sites-available/fixflow-temp
+```
+
+```nginx
+server {
+    listen 80;
+    server_name yourdomain.com api.yourdomain.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 200 'OK';
+        add_header Content-Type text/plain;
+    }
+}
+```
+
+```bash
+# Enable temp config
+sudo ln -sf /etc/nginx/sites-available/fixflow-temp /etc/nginx/sites-enabled/fixflow
+sudo systemctl reload nginx
+
+# Get certificates
+sudo certbot certonly --webroot -w /var/www/certbot \
+    -d yourdomain.com \
+    -d api.yourdomain.com \
+    --email your-email@example.com \
+    --agree-tos \
+    --non-interactive
+
+# Restore full config
+sudo ln -sf /etc/nginx/sites-available/fixflow /etc/nginx/sites-enabled/fixflow
+sudo systemctl reload nginx
+```
+
+#### 4. Configure Auto-Renewal
+
+```bash
+# Test renewal
+sudo certbot renew --dry-run
+
+# Certbot automatically adds a systemd timer for renewal
+# Verify it's active
+sudo systemctl status certbot.timer
+```
+
+#### 5. Create Post-Renewal Hook (Reload Nginx)
+
+```bash
+sudo nano /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+```
+
+```bash
+#!/bin/bash
+systemctl reload nginx
+```
+
+```bash
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+```
+
+### Verifying the Deployment
+
+#### 1. Check All Services
+
+```bash
+# Docker containers
+docker compose ps
+
+# Nginx status
+sudo systemctl status nginx
+
+# Check API health
+curl https://api.yourdomain.com/health
+
+# Check frontend
+curl -I https://yourdomain.com
+```
+
+#### 2. Check SSL Certificates
+
+```bash
+# Test SSL configuration
+curl -vI https://api.yourdomain.com 2>&1 | grep -A5 "SSL certificate"
+
+# Online SSL test
+# Visit: https://www.ssllabs.com/ssltest/analyze.html?d=yourdomain.com
+```
+
+#### 3. Test GitHub Webhook
+
+```bash
+curl -X POST https://api.yourdomain.com/webhooks/github \
+  -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: ping" \
+  -d '{"zen": "test"}'
+```
+
+---
+
+## Traditional Deployment
+
+If you prefer not to use Docker, follow these steps:
 
 ### 1. Server Requirements
 
@@ -78,7 +612,7 @@ npm run db:migrate:prod
 
 ```bash
 # Clone repository
-git clone https://github.com/bounty-hunter/bounty-hunter.git
+git clone https://github.com/your-org/bounty-hunter.git
 cd bounty-hunter/bot
 
 # Install dependencies
@@ -90,33 +624,7 @@ cp .env.example .env
 
 ### 3. Configure Environment
 
-Edit `.env` with production values:
-
-```env
-# Server Configuration
-NODE_ENV=production
-PORT=3000
-BOT_URL=https://api.bounty-hunter.io
-
-# Database
-DATABASE_URL=postgresql://bounty_prod:password@db.example.com:5432/bounty_hunter_prod?sslmode=require
-
-# GitHub App
-GITHUB_APP_ID=123456
-GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----..."
-GITHUB_WEBHOOK_SECRET=your_webhook_secret
-
-# MNEE
-MNEE_ENVIRONMENT=production
-MNEE_API_KEY=your_production_api_key
-MNEE_BOT_ADDRESS=1YourMNEEWalletAddress...
-MNEE_BOT_WIF=LYourPrivateKeyInWIFFormat...
-
-# Security
-API_SECRET=your_api_secret
-JWT_SECRET=your_jwt_secret
-ALLOWED_ORIGINS=https://bounty-hunter-dashboard.vercel.app
-```
+Edit `.env` with production values (see Environment Configuration section above).
 
 ### 4. Setup Process Manager
 
@@ -130,7 +638,7 @@ npm install -g pm2
 cat > ecosystem.config.js << EOF
 module.exports = {
   apps: [{
-    name: 'bounty-hunter-bot',
+    name: 'fixflow-bot',
     script: './src/index.js',
     instances: 2,
     exec_mode: 'cluster',
@@ -155,58 +663,7 @@ pm2 save
 pm2 startup
 ```
 
-### 5. Configure Nginx
-
-```nginx
-server {
-    listen 80;
-    server_name api.bounty-hunter.io;
-    return 301 https://$server_name$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name api.bounty-hunter.io;
-
-    ssl_certificate /etc/letsencrypt/live/api.bounty-hunter.io/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api.bounty-hunter.io/privkey.pem;
-
-    location / {
-        proxy_pass http://localhost:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location /webhooks {
-        proxy_pass http://localhost:3000/webhooks;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_request_buffering off;
-    }
-}
-```
-
-### 6. Setup SSL
-
-```bash
-# Install Certbot
-sudo apt-get install certbot python3-certbot-nginx
-
-# Get SSL certificate
-sudo certbot --nginx -d api.bounty-hunter.io
-
-# Auto-renewal
-sudo certbot renew --dry-run
-```
+---
 
 ## GitHub App Setup
 
@@ -216,8 +673,8 @@ Go to GitHub Settings > Developer settings > GitHub Apps > New GitHub App
 
 **Settings:**
 - **Name**: FixFlow Bot
-- **Homepage URL**: https://bounty-hunter.io
-- **Webhook URL**: https://api.bounty-hunter.io/webhooks/github
+- **Homepage URL**: https://yourdomain.com
+- **Webhook URL**: https://api.yourdomain.com/webhooks/github
 - **Webhook secret**: Generate a secure secret
 
 **Permissions:**
@@ -249,10 +706,12 @@ After creating the app:
 
 Ensure webhook URL is accessible and returns 200 OK:
 ```bash
-curl -X POST https://api.bounty-hunter.io/webhooks/github \
+curl -X POST https://api.yourdomain.com/webhooks/github \
   -H "Content-Type: application/json" \
   -d '{"test": true}'
 ```
+
+---
 
 ## MNEE Configuration
 
@@ -270,14 +729,14 @@ curl -X POST https://api.bounty-hunter.io/webhooks/github \
 
 3. **Configure Webhooks**
    - Add webhook URL in MNEE dashboard
-   - URL: `https://api.bounty-hunter.io/webhooks/mnee-status`
+   - URL: `https://api.yourdomain.com/webhooks/mnee-status`
    - Events: Transaction status updates
 
 ### 2. Test Configuration
 
 ```bash
 # Test MNEE connection
-curl http://localhost:3000/api/bounties/wallet/balance \
+curl https://api.yourdomain.com/api/bounties/wallet/balance \
   -H "Authorization: Bearer YOUR_API_TOKEN"
 ```
 
@@ -290,106 +749,68 @@ Expected response:
 }
 ```
 
+---
+
 ## Monitoring Setup
 
-### 1. Application Monitoring
+### 1. Docker Monitoring
 
-**PM2 Monitoring:**
 ```bash
-# View logs
-pm2 logs bounty-hunter-bot
+# View container stats
+docker stats
 
-# Monitor resources
-pm2 monit
+# View all logs
+docker compose logs -f
 
-# Setup web dashboard
-pm2 install pm2-web
+# View specific service logs
+docker compose logs bot -f --tail 100
 ```
 
-**Health Checks:**
+### 2. Health Checks
+
 ```bash
-# Add health endpoint
-curl https://api.bounty-hunter.io/health
+# API health
+curl https://api.yourdomain.com/health
+
+# Database health (via API)
+curl https://api.yourdomain.com/api/admin/health \
+  -H "X-Admin-Key: YOUR_ADMIN_KEY"
 ```
 
-### 2. Database Monitoring
+### 3. Log Rotation
 
-**Connection Pool Monitoring:**
-```javascript
-// Add to db.js
-setInterval(async () => {
-  const pool = await pgPool.query('SELECT count(*) FROM pg_stat_activity');
-  console.log('Active connections:', pool.rows[0].count);
-}, 60000);
+Create a logrotate config for Nginx:
+
+```bash
+sudo nano /etc/logrotate.d/fixflow
 ```
 
-**Query Performance:**
-```sql
--- Enable pg_stat_statements
-CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
-
--- View slow queries
-SELECT query, mean_exec_time, calls 
-FROM pg_stat_statements 
-ORDER BY mean_exec_time DESC 
-LIMIT 10;
+```
+/var/log/nginx/fixflow-*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    create 0640 www-data adm
+    sharedscripts
+    postrotate
+        [ -f /var/run/nginx.pid ] && kill -USR1 `cat /var/run/nginx.pid`
+    endscript
+}
 ```
 
-### 3. Error Tracking
+### 4. Setup Alerts
 
-Setup Sentry for error tracking:
-
-```javascript
-// In bot/.env
-SENTRY_DSN=your_sentry_dsn
-
-// In src/index.js
-const Sentry = require("@sentry/node");
-Sentry.init({ dsn: process.env.SENTRY_DSN });
-```
-
-### 4. Metrics Dashboard
-
-Setup Grafana + Prometheus:
-
-1. **Install Prometheus:**
-```yaml
-# prometheus.yml
-global:
-  scrape_interval: 15s
-
-scrape_configs:
-  - job_name: 'bounty-hunter'
-    static_configs:
-      - targets: ['localhost:3000']
-```
-
-2. **Add metrics endpoint:**
-```javascript
-// src/routes/metrics.js
-const promClient = require('prom-client');
-const register = new promClient.Registry();
-
-// Add default metrics
-promClient.collectDefaultMetrics({ register });
-
-// Custom metrics
-const bountiesCreated = new promClient.Counter({
-  name: 'bounties_created_total',
-  help: 'Total number of bounties created'
-});
-
-register.registerMetric(bountiesCreated);
-```
-
-### 5. Alerts
-
-Setup alerts for:
+Monitor for:
 - Low MNEE wallet balance (< 100 MNEE)
 - High error rate (> 1% of requests)
 - Database connection issues
 - GitHub webhook failures
-- Failed payment transactions
+- Container health status
+
+---
 
 ## Security Checklist
 
@@ -400,14 +821,13 @@ Setup alerts for:
 - [ ] Regular key rotation
 
 ### 2. Network Security
-- [ ] SSL/TLS enabled
-- [ ] Firewall configured
-- [ ] Only necessary ports open
-- [ ] DDoS protection enabled
+- [ ] SSL/TLS enabled with strong ciphers
+- [ ] Firewall configured (only 22, 80, 443 open)
+- [ ] Rate limiting configured
+- [ ] DDoS protection enabled (CloudFlare/AWS Shield)
 
 ### 3. Application Security
 - [ ] Input validation on all endpoints
-- [ ] Rate limiting enabled
 - [ ] CORS properly configured
 - [ ] Authentication on all routes
 - [ ] SQL injection prevention
@@ -415,107 +835,162 @@ Setup alerts for:
 ### 4. Database Security
 - [ ] Strong passwords
 - [ ] SSL connections required
-- [ ] Regular backups
+- [ ] Regular backups configured
 - [ ] Access controls configured
 
-### 5. MNEE Security
+### 5. Docker Security
+- [ ] Non-root users in containers
+- [ ] Read-only file systems where possible
+- [ ] Resource limits set
+- [ ] Regular image updates
+
+### 6. MNEE Security
 - [ ] Private keys encrypted at rest
 - [ ] Wallet balance monitoring
 - [ ] Transaction validation
 - [ ] Webhook signature verification
 
-### 6. Monitoring
-- [ ] Error tracking enabled
-- [ ] Performance monitoring
-- [ ] Security alerts configured
-- [ ] Regular log reviews
+---
 
-## Deployment Checklist
+## Common Operations
 
-### Pre-deployment
-- [ ] All tests passing
-- [ ] Security audit completed
-- [ ] Documentation updated
-- [ ] Backup procedures in place
+### Updating the Application
 
-### Deployment
-- [ ] Database migrated and seeded
-- [ ] Bot server configured and running
-- [ ] GitHub App installed on repositories
-- [ ] MNEE wallet funded
-- [ ] Monitoring systems active
+```bash
+cd /home/ubuntu/bounty-hunter
 
-### Post-deployment
-- [ ] Health checks passing
-- [ ] Test bounty creation
-- [ ] Test payment flow
-- [ ] Monitor for 24 hours
-- [ ] Document any issues
+# Pull latest changes
+git pull origin main
 
-## Rollback Procedure
+# Rebuild containers
+docker compose build
 
-If issues occur:
+# Restart services
+docker compose down
+docker compose up -d
 
-1. **Immediate Actions:**
-   ```bash
-   # Stop bot server
-   pm2 stop bounty-hunter-bot
-   
-   # Disable GitHub webhooks
-   # (In GitHub App settings)
-   ```
+# Run any new migrations
+docker compose exec bot npm run db:migrate:prod
+```
 
-2. **Investigate Issues:**
-   - Check logs: `pm2 logs bounty-hunter-bot`
-   - Review error tracking
-   - Check database state
+### Viewing Logs
 
-3. **Fix and Redeploy:**
-   ```bash
-   # Apply fixes
-   git pull origin main
-   npm install
-   
-   # Run migrations if needed
-   npm run db:migrate:prod
-   
-   # Restart services
-   pm2 restart bounty-hunter-bot
-   ```
+```bash
+# All services
+docker compose logs -f
 
-## Maintenance
+# Specific service
+docker compose logs bot -f
+docker compose logs frontend -f
 
-### Regular Tasks
+# Nginx logs
+sudo tail -f /var/log/nginx/fixflow-api-access.log
+sudo tail -f /var/log/nginx/fixflow-api-error.log
+```
 
-**Daily:**
-- Check wallet balance
-- Review error logs
-- Monitor active bounties
+### Backup Database (AWS RDS)
 
-**Weekly:**
-- Review security alerts
-- Check for dependency updates
-- Backup database
+```bash
+# Create manual snapshot in AWS Console
+# Or use AWS CLI:
+aws rds create-db-snapshot \
+  --db-instance-identifier fixflow-db \
+  --db-snapshot-identifier fixflow-backup-$(date +%Y%m%d)
 
-**Monthly:**
-- Rotate API keys
-- Review access logs
-- Update documentation
-- Security patches
+# For local backup using pg_dump (from EC2):
+PGPASSWORD='your_password' pg_dump -h fixflow-db.xxxxxxxxx.us-east-1.rds.amazonaws.com \
+  -U fixflow -d fixflow > backup_$(date +%Y%m%d).sql
 
-### Scaling Considerations
+# Restore from backup:
+PGPASSWORD='your_password' psql -h fixflow-db.xxxxxxxxx.us-east-1.rds.amazonaws.com \
+  -U fixflow -d fixflow < backup_20240101.sql
+```
 
-As usage grows:
+### Restart Services
 
-1. **Database**: Consider connection pooling and read replicas
-2. **API Server**: Add load balancer and multiple instances
-3. **MNEE**: Setup multiple wallets for parallel processing
-4. **Monitoring**: Implement distributed tracing
+```bash
+# Restart all
+docker compose restart
+
+# Restart specific service
+docker compose restart bot
+docker compose restart frontend
+
+# Full restart (down + up)
+docker compose down && docker compose up -d
+```
+
+---
+
+## Troubleshooting
+
+### Container Issues
+
+```bash
+# Check container status
+docker compose ps
+
+# View container logs
+docker compose logs bot --tail 100
+
+# Enter container shell
+docker compose exec bot sh
+
+# Check container resource usage
+docker stats
+```
+
+### Nginx Issues
+
+```bash
+# Test configuration
+sudo nginx -t
+
+# Check error logs
+sudo tail -f /var/log/nginx/error.log
+
+# Reload configuration
+sudo systemctl reload nginx
+```
+
+### SSL Issues
+
+```bash
+# Check certificate status
+sudo certbot certificates
+
+# Force renewal
+sudo certbot renew --force-renewal
+
+# Check SSL configuration
+openssl s_client -connect yourdomain.com:443 -servername yourdomain.com
+```
+
+### Database Issues (AWS RDS)
+
+```bash
+# Connect to RDS database from EC2
+PGPASSWORD='your_password' psql -h fixflow-db.xxxxxxxxx.us-east-1.rds.amazonaws.com \
+  -U fixflow -d fixflow
+
+# Check connections
+SELECT * FROM pg_stat_activity;
+
+# Check database size
+SELECT pg_size_pretty(pg_database_size('fixflow'));
+
+# Check RDS metrics in AWS Console:
+# - CPU Utilization
+# - Database Connections
+# - Free Storage Space
+```
+
+---
 
 ## Support
 
 For deployment issues:
-- Documentation: https://docs.bounty-hunter.io
-- GitHub Issues: https://github.com/bounty-hunter/bounty-hunter/issues
-- Discord: https://discord.gg/bounty-hunter
-- Email: support@bounty-hunter.io
+- Documentation: https://docs.fixflow.io
+- GitHub Issues: https://github.com/your-org/bounty-hunter/issues
+- Discord: https://discord.gg/fixflow
+- Email: support@fixflow.io

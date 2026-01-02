@@ -1,0 +1,59 @@
+# FixFlow Docker Compose Configuration
+# Orchestrates the bot and frontend services
+# Uses external database (AWS RDS)
+
+version: '3.8'
+
+services:
+  # ============================================
+  # Bot Backend Service
+  # ============================================
+  bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    container_name: fixflow-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - fixflow-network
+
+  # ============================================
+  # Frontend Service
+  # ============================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    container_name: fixflow-frontend
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - bot
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - fixflow-network
+
+# ============================================
+# Networks
+# ============================================
+networks:
+  fixflow-network:
+    driver: bridge
