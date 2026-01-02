@@ -3,18 +3,18 @@
 
 bounty_config:
   # Default bounty amount in MNEE (USD-pegged stablecoin)
-  default_amount: 50
+  default_amount: 5
   
   # Maximum bounty amount after escalation
-  max_bounty: 200
+  max_bounty: 20
   
   # Severity-based multipliers
   # Apply bounty:critical, bounty:high, etc. labels to issues
   severity_multipliers:
-    critical: 4.0   # 200 MNEE for critical bugs
-    high: 2.0       # 100 MNEE for high severity
-    medium: 1.0     # 50 MNEE for medium (default)
-    low: 0.5        # 25 MNEE for low priority
+    critical: 4.0   
+    high: 2.0       
+    medium: 1.0     
+    low: 0.5        
   
   # Escalation schedule (bounty increases over time)
   escalation:

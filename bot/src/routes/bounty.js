@@ -1,9 +1,176 @@
 import express from 'express';
 const router = express.Router();
+const publicRouter = express.Router(); // Public routes - no auth required
 import logger from '../utils/logger.js';
 import bountyService from '../services/bountyService.js';
 import mneeService from '../services/mnee.js';
 import Bounty from '../models/Bounty.js';
+import db from '../db.js';
+
+// ==========================================
+// PUBLIC ROUTES (no authentication required)
+// ==========================================
+
+// List all bounties (public - no auth required)
+publicRouter.get('/list', async (req, res) => {
+  try {
+    const { status, repository, page = 1, limit = 20 } = req.query;
+
+    let whereClause = '';
+    const values = [];
+    let paramIndex = 1;
+
+    // Build WHERE clause
+    const conditions = [];
+    if (status && status !== 'all') {
+      conditions.push(`status = $${paramIndex++}`);
+      values.push(status);
+    }
+    if (repository) {
+      conditions.push(`repository = $${paramIndex++}`);
+      values.push(repository);
+    }
+
+    if (conditions.length > 0) {
+      whereClause = 'WHERE ' + conditions.join(' AND ');
+    }
+
+    // Get bounties with pagination
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const query = `
+      SELECT * FROM bounties
+      ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT $${paramIndex++} OFFSET $${paramIndex++}
+    `;
+    values.push(parseInt(limit), offset);
+
+    const { rows } = await db.query(query, values);
+    const bounties = rows.map(row => Bounty.fromRow(row));
+
+    // Get total count
+    const countQuery = `SELECT COUNT(*) FROM bounties ${whereClause}`;
+    const countValues = values.slice(0, -2); // Remove limit and offset
+    const countResult = await db.query(countQuery, countValues);
+    const total = parseInt(countResult.rows[0].count);
+
+    res.json({
+      bounties: bounties.map(b => b.toJSON()),
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    logger.error('Failed to list bounties:', error);
+    res.status(500).json({
+      error: 'Failed to list bounties',
+      message: error.message
+    });
+  }
+});
+
+// Get single bounty details (public)
+publicRouter.get('/:bountyId', async (req, res) => {
+  try {
+    const { bountyId } = req.params;
+
+    // Skip if it matches known route patterns
+    if (bountyId === 'list' || bountyId === 'wallet' || bountyId === 'repository') {
+      return res.status(404).json({ error: 'Bounty not found' });
+    }
+
+    // Get from database
+    const bounty = await Bounty.findOne({ bountyId: parseInt(bountyId) });
+    if (!bounty) {
+      return res.status(404).json({ error: 'Bounty not found' });
+    }
+
+    res.json(bounty.toJSON());
+  } catch (error) {
+    logger.error('Failed to get bounty:', error);
+    res.status(500).json({
+      error: 'Failed to get bounty details',
+      message: error.message
+    });
+  }
+});
+
+// ==========================================
+// AUTHENTICATED ROUTES (require auth)
+// ==========================================
+
+// Get wallet balance (must come before /:bountyId)
+router.get('/wallet/balance', async (req, res) => {
+  try {
+    const balance = await mneeService.getBalance();
+    res.json({
+      balance: balance.balance,
+      address: balance.address,
+      currency: 'MNEE'
+    });
+  } catch (error) {
+    logger.error('Failed to get wallet balance:', error);
+    res.status(500).json({
+      error: 'Failed to get wallet balance',
+      message: error.message
+    });
+  }
+});
+
+// List bounties for a repository (must come before /:bountyId)
+router.get('/repository/:owner/:repo', async (req, res) => {
+  try {
+    const { owner, repo } = req.params;
+    const repository = `${owner}/${repo}`;
+    const { status = 'active', page = 1, limit = 20 } = req.query;
+
+    let whereClause = 'WHERE repository = $1';
+    const values = [repository];
+    let paramIndex = 2;
+
+    if (status !== 'all') {
+      whereClause += ` AND status = $${paramIndex++}`;
+      values.push(status);
+    }
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const query = `
+      SELECT * FROM bounties
+      ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT $${paramIndex++} OFFSET $${paramIndex++}
+    `;
+    values.push(parseInt(limit), offset);
+
+    const { rows } = await db.query(query, values);
+    const bounties = rows.map(row => Bounty.fromRow(row));
+
+    // Get total count
+    const countQuery = `SELECT COUNT(*) FROM bounties ${whereClause}`;
+    const countValues = values.slice(0, -2);
+    const countResult = await db.query(countQuery, countValues);
+    const total = parseInt(countResult.rows[0].count);
+
+    res.json({
+      bounties: bounties.map(b => b.toJSON()),
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    logger.error('Failed to list bounties:', error);
+    res.status(500).json({
+      error: 'Failed to list bounties',
+      message: error.message
+    });
+  }
+});
 
 // Create a new bounty
 router.post('/', async (req, res) => {
@@ -59,43 +226,6 @@ router.get('/:bountyId', async (req, res) => {
     logger.error('Failed to get bounty:', error);
     res.status(500).json({
       error: 'Failed to get bounty details',
-      message: error.message
-    });
-  }
-});
-
-// List bounties for a repository
-router.get('/repository/:owner/:repo', async (req, res) => {
-  try {
-    const { owner, repo } = req.params;
-    const repository = `${owner}/${repo}`;
-    const { status = 'active', page = 1, limit = 20 } = req.query;
-
-    const query = { repository };
-    if (status !== 'all') {
-      query.status = status;
-    }
-
-    const bounties = await Bounty.find(query)
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
-      .skip((parseInt(page) - 1) * parseInt(limit));
-
-    const total = await Bounty.countDocuments(query);
-
-    res.json({
-      bounties: bounties.map(b => b.toJSON()),
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / parseInt(limit))
-      }
-    });
-  } catch (error) {
-    logger.error('Failed to list bounties:', error);
-    res.status(500).json({
-      error: 'Failed to list bounties',
       message: error.message
     });
   }
@@ -189,22 +319,6 @@ router.post('/:bountyId/escalate', async (req, res) => {
   }
 });
 
-// Get wallet balance
-router.get('/wallet/balance', async (req, res) => {
-  try {
-    const balance = await mneeService.getBalance();
-    res.json({
-      balance: balance.balance,
-      address: balance.address,
-      currency: 'MNEE'
-    });
-  } catch (error) {
-    logger.error('Failed to get wallet balance:', error);
-    res.status(500).json({
-      error: 'Failed to get wallet balance',
-      message: error.message
-    });
-  }
-});
-
+// Export both routers
+export const publicBountyRoutes = publicRouter;
 export default router;

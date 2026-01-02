@@ -180,12 +180,22 @@ class ApiClient {
     return this.request(`/api/user/contributors?limit=${limit}`);
   }
 
+  // Public bounties endpoint (no auth required)
+  async getAllBounties(options: { status?: string; page?: number; limit?: number; repository?: string } = {}): Promise<PaginatedResponse<Bounty>> {
+    const params = new URLSearchParams();
+    if (options.status) params.set('status', options.status);
+    if (options.page) params.set('page', options.page.toString());
+    if (options.limit) params.set('limit', options.limit.toString());
+    if (options.repository) params.set('repository', options.repository);
+    return this.request(`/api/bounties/list?${params}`);
+  }
+
   // Admin endpoints
   async getMetrics(): Promise<Metrics> {
     return this.request('/api/admin/metrics');
   }
 
-  async getAllBounties(options: { status?: string; page?: number; limit?: number; repository?: string } = {}): Promise<PaginatedResponse<Bounty>> {
+  async getAdminBounties(options: { status?: string; page?: number; limit?: number; repository?: string } = {}): Promise<PaginatedResponse<Bounty>> {
     const params = new URLSearchParams();
     if (options.status) params.set('status', options.status);
     if (options.page) params.set('page', options.page.toString());

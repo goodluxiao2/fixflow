@@ -16,8 +16,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci && npm cache clean --force
+# Install dependencies (use npm install since package-lock.json may not exist)
+RUN npm install && npm cache clean --force
 
 # ============================================
 # Builder Stage
@@ -34,11 +34,14 @@ COPY . .
 
 # Set build-time environment variables
 # These can be overridden at build time with --build-arg
-ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_API_URL=http://localhost:3000
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
 # Disable telemetry during build
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Create public directory if it doesn't exist (for Next.js)
+RUN mkdir -p public
 
 # Build the Next.js application
 RUN npm run build
@@ -58,7 +61,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
-# Copy built assets from builder
+# Create public directory
+RUN mkdir -p public && chown nextjs:nodejs public
+
+# Copy public directory from builder (may be empty)
 COPY --from=builder /app/public ./public
 
 # Set correct permissions for prerender cache

@@ -60,7 +60,12 @@ app.get('/health', (req, res) => {
   });
 });
 
-// API Routes
+// Public API Routes (no authentication required)
+// These must be defined BEFORE the authenticated routes
+import { publicBountyRoutes } from './routes/bounty.js';
+app.use('/api/bounties', publicBountyRoutes);
+
+// Authenticated API Routes
 app.use('/api/bounties', authMiddleware, bountyRoutes);
 app.use('/api/admin', authMiddleware, adminRoutes);
 app.use('/api/user', userRoutes); // User authentication and profile routes
