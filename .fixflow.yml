@@ -31,5 +31,4 @@ bounty_config:
 labels:
   - bounty
   - bug
-  - automated
   - good-first-issue
