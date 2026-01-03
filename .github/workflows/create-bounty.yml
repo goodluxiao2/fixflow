@@ -25,7 +25,7 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
       
       - name: Create FixFlow Bounty
-        uses: tufstraka/Bounty-Hunter/github-action@main
+        uses: tufstraka/fixflow/github-action@main
         id: bounty
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -34,6 +34,10 @@ jobs:
           bounty_amount: 50
           max_bounty: 150
           config_file: .fixflow.yml
+          aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws_region: us-east-1
+          bedrock_model_id: anthropic.claude-3-sonnet-20240229-v1:0
       
       - name: Bounty Creation Summary
         if: steps.bounty.outputs.bounty_created == 'true'
