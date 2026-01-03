@@ -31,8 +31,8 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           bot_server_url: ${{ secrets.BOUNTY_HUNTER_SERVER_URL }}
           bot_api_key: ${{ secrets.BOUNTY_HUNTER_API_KEY }}
-          bounty_amount: 50
-          max_bounty: 150
+          bounty_amount: 5
+          max_bounty: 20
           config_file: .fixflow.yml
           aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
