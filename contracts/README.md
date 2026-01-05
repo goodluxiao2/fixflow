@@ -13,48 +13,101 @@ The `BountyEscrow` contract manages bounty payments on the Ethereum blockchain:
 
 ## MNEE Token
 
-| Network | Address |
-|---------|---------|
-| Ethereum Mainnet | `0x8ccedbAe4916b79da7F3F612EfB2EB93A2bFD6cF` |
-
-[View on Etherscan](https://etherscan.io/token/0x8ccedbAe4916b79da7F3F612EfB2EB93A2bFD6cF)
+| Network | Address | Explorer |
+|---------|---------|----------|
+| Ethereum Mainnet | `0x8ccedbAe4916b79da7F3F612EfB2EB93A2bFD6cF` | [Etherscan](https://etherscan.io/token/0x8ccedbAe4916b79da7F3F612EfB2EB93A2bFD6cF) |
 
 ## Quick Start
 
-### Install Dependencies
+### 1. Install Dependencies
 
 ```bash
 npm install
 ```
 
-### Configure Environment
+### 2. Configure Environment
 
 ```bash
 cp .env.example .env
-# Edit .env with your RPC URLs and private keys
 ```
 
-### Compile Contracts
+Edit `.env` with your configuration:
+
+```env
+# RPC URLs (get from Alchemy or Infura)
+SEPOLIA_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY
+MAINNET_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY
+
+# Deployer private key (without 0x prefix)
+DEPLOYER_PRIVATE_KEY=your_private_key
+
+# Oracle address (bot wallet that releases bounties)
+ORACLE_ADDRESS=0xYourBotWallet
+
+# Fee recipient
+FEE_RECIPIENT_ADDRESS=0xYourTreasuryWallet
+
+# Etherscan API for verification
+ETHERSCAN_API_KEY=your_etherscan_key
+```
+
+### 3. Compile Contracts
 
 ```bash
 npm run compile
 ```
 
-### Run Tests
+### 4. Run Tests
 
 ```bash
 npm test
 ```
 
-### Deploy
+## Deployment
+
+📖 **For comprehensive deployment instructions, see [SMART_CONTRACT_DEPLOYMENT.md](../docs/SMART_CONTRACT_DEPLOYMENT.md)**
+
+### Quick Deploy to Sepolia (Testing)
 
 ```bash
-# Sepolia testnet
+# Step 1: Deploy test MNEE token
+npm run deploy:test-token
+
+# Step 2: Add token address to .env
+# MNEE_TOKEN_ADDRESS=0x...
+
+# Step 3: Deploy escrow contract
 npm run deploy:sepolia
 
-# Mainnet
-npm run deploy:mainnet
+# Step 4: Verify on Etherscan
+npm run verify:sepolia -- 0xContractAddress "arg1" "arg2" "arg3" "arg4"
 ```
+
+### Quick Deploy to Mainnet (Production)
+
+```bash
+# Ensure .env has:
+# MNEE_TOKEN_ADDRESS=0x8ccedbAe4916b79da7F3F612EfB2EB93A2bFD6cF
+
+npm run deploy:mainnet
+npm run verify:mainnet -- 0xContractAddress "arg1" "arg2" "arg3" "arg4"
+```
+
+### Available Scripts
+
+| Script | Description |
+|--------|-------------|
+| `npm run compile` | Compile contracts |
+| `npm test` | Run unit tests |
+| `npm run test:coverage` | Run tests with coverage |
+| `npm run deploy:local` | Deploy to local Hardhat network |
+| `npm run deploy:sepolia` | Deploy to Sepolia testnet |
+| `npm run deploy:mainnet` | Deploy to Ethereum mainnet |
+| `npm run deploy:test-token` | Deploy test MNEE token (Sepolia only) |
+| `npm run verify:sepolia` | Verify contract on Sepolia Etherscan |
+| `npm run verify:mainnet` | Verify contract on Mainnet Etherscan |
+| `npm run node` | Start local Hardhat node |
+| `npm run clean` | Clean build artifacts |
 
 ## Contract Architecture
 
@@ -62,7 +115,13 @@ npm run deploy:mainnet
 contracts/
 ├── BountyEscrow.sol      # Main escrow contract
 └── mocks/
-    └── MockERC20.sol     # Mock token for testing
+    └── MockERC20.sol     # Test token for testnets
+scripts/
+├── deploy.js             # Main deployment script
+└── deploy-test-token.js  # Test token deployment
+deployments/              # Deployment artifacts (auto-generated)
+└── sepolia.json
+└── mainnet.json
 ```
 
 ## Roles
@@ -81,7 +140,7 @@ contracts/
 | `maxBountyAmount` | 1M MNEE | Maximum bounty |
 | `platformFeeBps` | 250 | Platform fee (2.5%) |
 
-## Functions
+## Contract Functions
 
 ### For Bounty Creators
 
@@ -137,22 +196,50 @@ event BountyCancelled(bountyId, creator, refundedAmount)
 event BountyExpired(bountyId, refundedAmount)
 ```
 
-## Security
+## Security Features
 
-- Uses OpenZeppelin's battle-tested contracts
-- ReentrancyGuard on all state-changing functions
-- Pausable for emergency situations
-- Role-based access control
-- SafeERC20 for token transfers
+- ✅ OpenZeppelin battle-tested contracts
+- ✅ ReentrancyGuard on all state-changing functions
+- ✅ Pausable for emergency situations
+- ✅ Role-based access control
+- ✅ SafeERC20 for token transfers
+- ✅ Input validation and bounds checking
 
 ## Gas Estimates
 
-| Operation | Estimated Gas |
-|-----------|--------------|
-| Create Bounty | ~150,000 |
-| Escalate | ~80,000 |
-| Release | ~100,000 |
-| Cancel | ~70,000 |
+| Operation | Estimated Gas | Cost @ 30 gwei |
+|-----------|--------------|----------------|
+| Deploy Contract | ~2,500,000 | ~0.075 ETH |
+| Create Bounty | ~150,000 | ~0.0045 ETH |
+| Escalate | ~80,000 | ~0.0024 ETH |
+| Release | ~100,000 | ~0.003 ETH |
+| Cancel | ~70,000 | ~0.0021 ETH |
+
+## Testing
+
+Run the full test suite:
+
+```bash
+npm test
+```
+
+Run with gas reporting:
+
+```bash
+REPORT_GAS=true npm test
+```
+
+Run with coverage:
+
+```bash
+npm run test:coverage
+```
+
+## Documentation
+
+- [Smart Contract Deployment Guide](../docs/SMART_CONTRACT_DEPLOYMENT.md) - Detailed deployment instructions
+- [Blockchain Integration](../docs/BLOCKCHAIN_INTEGRATION.md) - How the bot interacts with contracts
+- [API Reference](../docs/API_REFERENCE.md) - Full API documentation
 
 ## License
 
