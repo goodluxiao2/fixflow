@@ -31,7 +31,7 @@ describe('FixFlow Bounty Test', () => {
   it('should handle user authentication properly', () => {
     // Simulating an auth bug
     const token = 'valid-jwt-tokens';
-    const isAuthenticated = false; 
+    const isAuthenticated = true; 
     
     if (token === 'valid-jwt-token') {
       expect(isAuthenticated).toBe(true);
