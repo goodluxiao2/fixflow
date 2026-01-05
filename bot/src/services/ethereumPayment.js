@@ -47,64 +47,135 @@ class EthereumPaymentService {
   }
 
   async initialize() {
-    logger.debug('Initializing Ethereum payment service...');
+    logger.info('[ETH-PAYMENT] ========== INITIALIZING ETHEREUM PAYMENT SERVICE ==========');
 
     const rpcUrl = process.env.ETHEREUM_RPC_URL;
     const privateKey = process.env.ETHEREUM_PRIVATE_KEY;
     const escrowAddress = process.env.BOUNTY_ESCROW_ADDRESS;
+    const mneeTokenAddress = process.env.MNEE_TOKEN_ADDRESS;
+
+    logger.info('[ETH-PAYMENT] Configuration check:');
+    logger.info(`[ETH-PAYMENT]   - ETHEREUM_RPC_URL: ${rpcUrl ? `✓ Set (${rpcUrl.substring(0, 30)}...)` : '✗ NOT SET'}`);
+    logger.info(`[ETH-PAYMENT]   - ETHEREUM_PRIVATE_KEY: ${privateKey ? '✓ Set (hidden)' : '✗ NOT SET'}`);
+    logger.info(`[ETH-PAYMENT]   - BOUNTY_ESCROW_ADDRESS: ${escrowAddress || '✗ NOT SET (will try without escrow)'}`);
+    logger.info(`[ETH-PAYMENT]   - MNEE_TOKEN_ADDRESS: ${mneeTokenAddress || '✗ NOT SET (will use default)'}`);
 
     if (!rpcUrl) {
+      logger.error('[ETH-PAYMENT] ✗ ETHEREUM_RPC_URL not set in environment variables');
       throw new Error('ETHEREUM_RPC_URL not set in environment variables');
     }
     if (!privateKey) {
+      logger.error('[ETH-PAYMENT] ✗ ETHEREUM_PRIVATE_KEY not set in environment variables');
       throw new Error('ETHEREUM_PRIVATE_KEY not set in environment variables');
-    }
-    if (!escrowAddress) {
-      throw new Error('BOUNTY_ESCROW_ADDRESS not set in environment variables');
     }
 
     try {
-      // Initialize provider and wallet
+      // Initialize provider
+      logger.info('[ETH-PAYMENT] Step 1: Connecting to Ethereum RPC...');
       this.provider = new ethers.JsonRpcProvider(rpcUrl);
+      
+      // Test provider connection
+      const blockNumber = await this.provider.getBlockNumber();
+      logger.info(`[ETH-PAYMENT] ✓ Connected to RPC. Current block: ${blockNumber}`);
+
+      // Initialize wallet
+      logger.info('[ETH-PAYMENT] Step 2: Initializing wallet...');
       this.wallet = new ethers.Wallet(privateKey, this.provider);
+      logger.info(`[ETH-PAYMENT] ✓ Wallet address: ${this.wallet.address}`);
 
-      // Initialize contracts
-      this.escrowContract = new ethers.Contract(
-        escrowAddress,
-        BOUNTY_ESCROW_ABI,
-        this.wallet
-      );
+      // Get network info
+      const network = await this.provider.getNetwork();
+      logger.info(`[ETH-PAYMENT] ✓ Network: ${network.name} (chainId: ${network.chainId})`);
 
-      // Get MNEE token address from escrow contract
-      const mneeAddress = process.env.MNEE_TOKEN_ADDRESS || await this.escrowContract.mneeToken();
+      // Check ETH balance
+      const ethBalance = await this.provider.getBalance(this.wallet.address);
+      const ethBalanceFormatted = ethers.formatEther(ethBalance);
+      logger.info(`[ETH-PAYMENT] ✓ ETH balance: ${ethBalanceFormatted} ETH`);
+
+      if (parseFloat(ethBalanceFormatted) < 0.001) {
+        logger.warn('[ETH-PAYMENT] ⚠ Low ETH balance! May not have enough for gas fees');
+      }
+
+      // Initialize escrow contract if address is provided
+      if (escrowAddress) {
+        logger.info('[ETH-PAYMENT] Step 3: Initializing escrow contract...');
+        this.escrowContract = new ethers.Contract(
+          escrowAddress,
+          BOUNTY_ESCROW_ABI,
+          this.wallet
+        );
+        logger.info(`[ETH-PAYMENT] ✓ Escrow contract: ${escrowAddress}`);
+      } else {
+        logger.info('[ETH-PAYMENT] Step 3: No escrow contract address provided, skipping');
+        this.escrowContract = null;
+      }
+
+      // Initialize MNEE token contract
+      logger.info('[ETH-PAYMENT] Step 4: Initializing MNEE token contract...');
+      let mneeAddress;
+      
+      if (mneeTokenAddress) {
+        mneeAddress = mneeTokenAddress;
+        logger.info(`[ETH-PAYMENT]   Using configured MNEE address: ${mneeAddress}`);
+      } else if (this.escrowContract) {
+        try {
+          mneeAddress = await this.escrowContract.mneeToken();
+          logger.info(`[ETH-PAYMENT]   Got MNEE address from escrow contract: ${mneeAddress}`);
+        } catch (err) {
+          logger.warn(`[ETH-PAYMENT]   Failed to get MNEE from escrow: ${err.message}`);
+          mneeAddress = MNEE_TOKEN_MAINNET;
+          logger.info(`[ETH-PAYMENT]   Using default mainnet MNEE address: ${mneeAddress}`);
+        }
+      } else {
+        mneeAddress = MNEE_TOKEN_MAINNET;
+        logger.info(`[ETH-PAYMENT]   Using default mainnet MNEE address: ${mneeAddress}`);
+      }
+
       this.mneeToken = new ethers.Contract(
         mneeAddress,
         ERC20_ABI,
         this.wallet
       );
 
-      // Get token decimals
-      this.decimals = await this.mneeToken.decimals();
+      // Get token info
+      logger.info('[ETH-PAYMENT] Step 5: Fetching token info...');
+      try {
+        this.decimals = await this.mneeToken.decimals();
+        const symbol = await this.mneeToken.symbol();
+        const tokenBalance = await this.mneeToken.balanceOf(this.wallet.address);
+        const tokenBalanceFormatted = ethers.formatUnits(tokenBalance, this.decimals);
+        
+        logger.info(`[ETH-PAYMENT] ✓ Token symbol: ${symbol}`);
+        logger.info(`[ETH-PAYMENT] ✓ Token decimals: ${this.decimals}`);
+        logger.info(`[ETH-PAYMENT] ✓ Token balance: ${tokenBalanceFormatted} ${symbol}`);
 
-      // Log connection info
-      const network = await this.provider.getNetwork();
-      const balance = await this.provider.getBalance(this.wallet.address);
-
-      logger.info('Ethereum payment service initialized', {
-        network: network.name,
-        chainId: network.chainId.toString(),
-        walletAddress: this.wallet.address,
-        ethBalance: ethers.formatEther(balance),
-        escrowContract: escrowAddress,
-        mneeToken: mneeAddress
-      });
+        if (parseFloat(tokenBalanceFormatted) === 0) {
+          logger.warn('[ETH-PAYMENT] ⚠ Token balance is 0! Cannot make payments until funded');
+        }
+      } catch (tokenError) {
+        logger.error(`[ETH-PAYMENT] ✗ Failed to fetch token info: ${tokenError.message}`);
+        logger.error('[ETH-PAYMENT]   This may indicate:');
+        logger.error('[ETH-PAYMENT]   1. Invalid token address');
+        logger.error('[ETH-PAYMENT]   2. Token contract not deployed on this network');
+        logger.error('[ETH-PAYMENT]   3. RPC connection issues');
+        throw tokenError;
+      }
 
       this.initialized = true;
+      logger.info('[ETH-PAYMENT] ========== INITIALIZATION COMPLETE ==========');
+      logger.info('[ETH-PAYMENT] Summary:');
+      logger.info(`[ETH-PAYMENT]   - Network: ${network.name} (chainId: ${network.chainId})`);
+      logger.info(`[ETH-PAYMENT]   - Wallet: ${this.wallet.address}`);
+      logger.info(`[ETH-PAYMENT]   - ETH Balance: ${ethBalanceFormatted} ETH`);
+      logger.info(`[ETH-PAYMENT]   - MNEE Token: ${mneeAddress}`);
+      logger.info(`[ETH-PAYMENT]   - Escrow Contract: ${escrowAddress || 'Not configured'}`);
+      logger.info('[ETH-PAYMENT] ================================================');
+
     } catch (error) {
-      logger.error('Failed to initialize Ethereum payment service', {
-        error: error.message,
-        stack: error.stack
-      });
+      logger.error('[ETH-PAYMENT] ========== INITIALIZATION FAILED ==========');
+      logger.error(`[ETH-PAYMENT] Error: ${error.message}`);
+      logger.error(`[ETH-PAYMENT] Stack: ${error.stack}`);
+      logger.error('[ETH-PAYMENT] ============================================');
       throw error;
     }
   }
@@ -363,39 +434,160 @@ class EthereumPaymentService {
    * This transfers tokens directly without the escrow contract
    */
   async sendPayment(recipientAddress, amount, bountyId) {
+    logger.info('[ETH-PAYMENT] ========== SEND PAYMENT ==========');
+    logger.info(`[ETH-PAYMENT] Bounty ID: ${bountyId}`);
+    logger.info(`[ETH-PAYMENT] Recipient: ${recipientAddress}`);
+    logger.info(`[ETH-PAYMENT] Amount: ${amount} MNEE`);
+
+    // Check initialization
     if (!this.initialized) {
-      throw new Error('Ethereum payment service not initialized');
+      logger.error('[ETH-PAYMENT] ✗ Service not initialized!');
+      logger.info('[ETH-PAYMENT] Attempting to initialize...');
+      try {
+        await this.initialize();
+      } catch (initError) {
+        logger.error(`[ETH-PAYMENT] ✗ Auto-initialization failed: ${initError.message}`);
+        throw new Error(`Ethereum payment service not initialized: ${initError.message}`);
+      }
     }
 
     try {
-      logger.info(`Sending ${amount} MNEE to ${recipientAddress} for bounty ${bountyId}`);
+      // Validate recipient address
+      logger.info('[ETH-PAYMENT] Step 1: Validating recipient address...');
+      if (!ethers.isAddress(recipientAddress)) {
+        logger.error(`[ETH-PAYMENT] ✗ Invalid Ethereum address: ${recipientAddress}`);
+        throw new Error(`Invalid Ethereum address: ${recipientAddress}`);
+      }
+      logger.info('[ETH-PAYMENT] ✓ Recipient address is valid');
 
+      // Check current balance
+      logger.info('[ETH-PAYMENT] Step 2: Checking balances...');
+      const tokenBalance = await this.mneeToken.balanceOf(this.wallet.address);
+      const tokenBalanceFormatted = this.fromAtomicUnits(tokenBalance);
+      logger.info(`[ETH-PAYMENT]   - Current MNEE balance: ${tokenBalanceFormatted}`);
+      logger.info(`[ETH-PAYMENT]   - Amount to send: ${amount}`);
+
+      // Convert amount to atomic units
       const atomicAmount = this.toAtomicUnits(amount);
+      logger.info(`[ETH-PAYMENT]   - Atomic amount: ${atomicAmount.toString()} (${this.decimals} decimals)`);
 
-      // Direct ERC20 transfer
+      // Check if we have enough balance
+      if (tokenBalance < atomicAmount) {
+        logger.error(`[ETH-PAYMENT] ✗ Insufficient balance!`);
+        logger.error(`[ETH-PAYMENT]   Have: ${tokenBalanceFormatted} MNEE`);
+        logger.error(`[ETH-PAYMENT]   Need: ${amount} MNEE`);
+        throw new Error(`Insufficient MNEE balance. Have: ${tokenBalanceFormatted}, Need: ${amount}`);
+      }
+      logger.info('[ETH-PAYMENT] ✓ Sufficient balance confirmed');
+
+      // Check ETH for gas
+      const ethBalance = await this.provider.getBalance(this.wallet.address);
+      const ethBalanceFormatted = ethers.formatEther(ethBalance);
+      logger.info(`[ETH-PAYMENT]   - ETH balance for gas: ${ethBalanceFormatted} ETH`);
+
+      if (parseFloat(ethBalanceFormatted) < 0.0001) {
+        logger.error('[ETH-PAYMENT] ✗ Insufficient ETH for gas!');
+        throw new Error(`Insufficient ETH for gas. Have: ${ethBalanceFormatted} ETH`);
+      }
+      logger.info('[ETH-PAYMENT] ✓ Sufficient ETH for gas');
+
+      // Estimate gas
+      logger.info('[ETH-PAYMENT] Step 3: Estimating gas...');
+      let gasEstimate;
+      try {
+        gasEstimate = await this.mneeToken.transfer.estimateGas(recipientAddress, atomicAmount);
+        logger.info(`[ETH-PAYMENT]   - Estimated gas: ${gasEstimate.toString()}`);
+      } catch (gasError) {
+        logger.error(`[ETH-PAYMENT] ✗ Gas estimation failed: ${gasError.message}`);
+        logger.error('[ETH-PAYMENT]   This usually means the transaction will fail');
+        logger.error('[ETH-PAYMENT]   Possible reasons:');
+        logger.error('[ETH-PAYMENT]   1. Insufficient token balance');
+        logger.error('[ETH-PAYMENT]   2. Contract paused or restricted');
+        logger.error('[ETH-PAYMENT]   3. Recipient address blacklisted');
+        throw new Error(`Gas estimation failed: ${gasError.message}`);
+      }
+
+      // Get gas price
+      const feeData = await this.provider.getFeeData();
+      logger.info(`[ETH-PAYMENT]   - Gas price: ${ethers.formatGwei(feeData.gasPrice || 0n)} gwei`);
+      const estimatedCost = (feeData.gasPrice || 0n) * gasEstimate;
+      logger.info(`[ETH-PAYMENT]   - Estimated cost: ${ethers.formatEther(estimatedCost)} ETH`);
+
+      // Send transaction
+      logger.info('[ETH-PAYMENT] Step 4: Sending transaction...');
+      logger.info(`[ETH-PAYMENT]   - From: ${this.wallet.address}`);
+      logger.info(`[ETH-PAYMENT]   - To (token): ${await this.mneeToken.getAddress()}`);
+      logger.info(`[ETH-PAYMENT]   - Transfer to: ${recipientAddress}`);
+      logger.info(`[ETH-PAYMENT]   - Amount: ${amount} MNEE`);
+
       const tx = await this.mneeToken.transfer(recipientAddress, atomicAmount);
-      const receipt = await tx.wait();
+      logger.info(`[ETH-PAYMENT] ✓ Transaction submitted!`);
+      logger.info(`[ETH-PAYMENT]   - TX Hash: ${tx.hash}`);
+      logger.info(`[ETH-PAYMENT]   - Nonce: ${tx.nonce}`);
 
-      logger.info('MNEE payment sent', {
-        txHash: tx.hash,
-        blockNumber: receipt.blockNumber,
-        amount,
-        recipient: recipientAddress
-      });
+      // Wait for confirmation
+      logger.info('[ETH-PAYMENT] Step 5: Waiting for confirmation...');
+      const receipt = await tx.wait();
+      
+      logger.info('[ETH-PAYMENT] ✓ Transaction confirmed!');
+      logger.info(`[ETH-PAYMENT]   - Block number: ${receipt.blockNumber}`);
+      logger.info(`[ETH-PAYMENT]   - Gas used: ${receipt.gasUsed.toString()}`);
+      logger.info(`[ETH-PAYMENT]   - Status: ${receipt.status === 1 ? 'SUCCESS' : 'FAILED'}`);
+
+      if (receipt.status !== 1) {
+        logger.error('[ETH-PAYMENT] ✗ Transaction failed on-chain!');
+        throw new Error('Transaction failed on-chain');
+      }
+
+      // Verify the transfer
+      logger.info('[ETH-PAYMENT] Step 6: Verifying transfer...');
+      const newBalance = await this.mneeToken.balanceOf(this.wallet.address);
+      const newBalanceFormatted = this.fromAtomicUnits(newBalance);
+      logger.info(`[ETH-PAYMENT]   - New balance: ${newBalanceFormatted} MNEE`);
+      logger.info(`[ETH-PAYMENT]   - Deducted: ${tokenBalanceFormatted - newBalanceFormatted} MNEE`);
+
+      logger.info('[ETH-PAYMENT] ========== PAYMENT SUCCESSFUL ==========');
+      logger.info(`[ETH-PAYMENT] Summary:`);
+      logger.info(`[ETH-PAYMENT]   - TX Hash: ${tx.hash}`);
+      logger.info(`[ETH-PAYMENT]   - Recipient: ${recipientAddress}`);
+      logger.info(`[ETH-PAYMENT]   - Amount: ${amount} MNEE`);
+      logger.info(`[ETH-PAYMENT]   - Gas used: ${receipt.gasUsed.toString()}`);
+      logger.info(`[ETH-PAYMENT]   - Block: ${receipt.blockNumber}`);
+      logger.info('[ETH-PAYMENT] ==========================================');
 
       return {
         success: true,
         transactionId: tx.hash,
+        transactionHash: tx.hash,
         amount,
         recipient: recipientAddress,
-        bountyId
+        bountyId,
+        blockNumber: receipt.blockNumber,
+        gasUsed: receipt.gasUsed.toString()
       };
     } catch (error) {
-      logger.error('Failed to send MNEE payment', {
-        error: error.message,
-        recipientAddress,
-        amount
-      });
+      logger.error('[ETH-PAYMENT] ========== PAYMENT FAILED ==========');
+      logger.error(`[ETH-PAYMENT] Error: ${error.message}`);
+      logger.error(`[ETH-PAYMENT] Bounty ID: ${bountyId}`);
+      logger.error(`[ETH-PAYMENT] Recipient: ${recipientAddress}`);
+      logger.error(`[ETH-PAYMENT] Amount: ${amount} MNEE`);
+      
+      // Parse common error types
+      if (error.message.includes('insufficient funds')) {
+        logger.error('[ETH-PAYMENT] Diagnosis: Insufficient ETH for gas');
+      } else if (error.message.includes('nonce')) {
+        logger.error('[ETH-PAYMENT] Diagnosis: Nonce issue - pending transaction?');
+      } else if (error.message.includes('execution reverted')) {
+        logger.error('[ETH-PAYMENT] Diagnosis: Contract execution reverted');
+        logger.error('[ETH-PAYMENT]   - Check token balance');
+        logger.error('[ETH-PAYMENT]   - Check if token is paused');
+        logger.error('[ETH-PAYMENT]   - Check for transfer restrictions');
+      } else if (error.message.includes('network')) {
+        logger.error('[ETH-PAYMENT] Diagnosis: Network connectivity issue');
+      }
+
+      logger.error(`[ETH-PAYMENT] Stack: ${error.stack}`);
+      logger.error('[ETH-PAYMENT] ==========================================');
       throw error;
     }
   }
